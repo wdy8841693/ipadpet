@@ -1,6 +1,8 @@
 # 鲸鱼娘 DSH 宠物 🐋‍♀️
 
-一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发女仆裙 Q 版少女，鲸尾 + 鳍耳，立绘来自开源项目 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 整图切换 + 程序化运动动画，30fps 低功耗运行，无网络、无内购、无第三方运行时依赖。
+一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发女仆裙 Q 版少女，鲸尾 + 鳍耳，立绘来自开源项目 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 整图切换 + 程序化运动动画，30fps 低功耗运行，无内购、无第三方运行时依赖。
+
+**v1.2.0 新增：语音唤醒 + DeepSeek Harness 对话。** 通过内网自部署的桥接服务器（`Server/`），对着 iPad 说 **"小鲸小鲸"** 即可唤醒她，随后语音下达指令，服务器完成唤醒词检测与中文语音识别，交给 DeepSeek Harness（DSH）处理，回答由 iPad 本地 TTS 播报，宠物同步切换"聆听/思考/播报"动画。语音仅在 App 前台工作，音频只走局域网。部署方式见 [Server/README.md](Server/README.md)。
 
 ![预览](docs/preview.png)
 
@@ -15,12 +17,15 @@
 | 🐟 投喂 | 小鱼干飞进嘴里，饱食↑ |
 | 🫧 玩耍 | 泡泡球弹跳，心情↑ 精力↓ |
 | 🌙 睡觉 | 入睡恢复精力，再点唤醒 |
+| 🎙️ 说话 | 开启语音 / 手动触发一次指令（免唤醒词） |
+| ⚙️ 设置 | 填写桥接服务器地址与访问令牌，保存即测试连通 |
 | ✏️ 改名 | 自定义名字（≤12 字符），台词随名字变化 |
 
+- **语音对话**：前台待唤醒 → 说"小鲸小鲸"（支持一句话带指令）→ DSH 生成回答 → 本地 TTS 播报，播报期间自动闭麦防自触发；也可点 🎙️ 手动开始。
 - **数值系统**：饱食 / 心情 / 精力三条状态槽，随时间缓慢衰减；离线最多结算 6 小时，不会"一觉醒来饿死"。
 - **自主行为**：加权随机状态机（待机/散步/巡游/睡觉），又饿又累时会变蔫、主动求关注。
-- **台词气泡**：按场景与数值状态选句，避免连续重复。
-- **持久化**：JSON 原子写入 Application Support，杀进程不丢档。
+- **台词气泡**：按场景与数值状态选句，避免连续重复；语音过程有专属气泡与状态。
+- **持久化**：JSON 原子写入 Application Support，杀进程不丢档；服务器地址存 UserDefaults，令牌存 Keychain。
 - **全方向旋转**：横竖屏自适应，`UIRequiresFullScreen` 全屏独占（老设备省内存）。
 
 ## 设备与性能预算（iPad mini 4）
@@ -96,24 +101,48 @@ python3 Tools/art/generate_assets.py
 python3 Tools/scripts/check.py
 ```
 
-校验：Swift 括号配平、工程配置（iOS 15 / 仅 iPad / 全屏）、纹理引用一致性、显存预算、测试覆盖。
+校验：Swift 括号配平、工程配置（iOS 15 / 仅 iPad / 全屏）、纹理引用一致性、显存预算、测试覆盖、语音权限声明、桥接服务器语法与纯逻辑测试。
+
+## 语音对话部署速览
+
+1. 服务器（内网 Linux/macOS，Python 3.10+）：
+
+```bash
+cd Server
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # 填 WHALEPET_TOKEN / DSH_HOME / WHALEPET_WORKSPACE / DEEPSEEK_API_KEY
+python run.py
+```
+
+2. iPad：⚙️ 设置 → 填 `http://服务器IP:8787` 和令牌 → 保存并测试 → 说"小鲸小鲸"。
+
+细节（权限模型、TLS、systemd）见 [Server/README.md](Server/README.md)。
+注意：DSH 处于开发者预览期，默认会话权限为 **read-only**；语音唤醒仅 App 前台有效。
 
 ## 目录结构
 
 ```
 ├── project.yml                  # XcodeGen 工程描述（唯一事实源）
+├── Server/                      # 内网桥接服务器（aiohttp + faster-whisper + DSH SDK）
+│   ├── whalepet_bridge/         # 服务主体（文本/唤醒逻辑可单测）
+│   ├── tests/                   # 27 个纯逻辑单元测试
+│   ├── requirements.txt / .env.example / run.py
+│   └── README.md                # 部署与协议文档
 ├── WhalePet/
 │   ├── Pet/                     # 纯逻辑 + 渲染节点
-│   │   ├── PetState.swift       # 状态枚举 + 数值模型（可单测）
+│   │   ├── PetState.swift       # 状态枚举（含语音三态）+ 数值模型（可单测）
 │   │   ├── PetBrain.swift       # 行为调度状态机（可单测）
 │   │   ├── PetStore.swift       # JSON 持久化（可单测）
 │   │   ├── Dialogue.swift       # 台词库
 │   │   └── PetNode.swift        # 状态立绘切换 + SKAction 运动动画
-│   ├── Scenes/PetScene.swift    # 主场景：交互/移动/特效/帧循环
+│   ├── Scenes/PetScene.swift    # 主场景：交互/移动/特效/帧循环/语音状态
+│   ├── Networking/DSHClient.swift  # HTTP 健康检查/聊天 + WebSocket 音频通道
+│   ├── Voice/VoiceController.swift # 麦克风采集/16k 转码/本地 TTS/状态机
 │   ├── UI/                      # SpeechBubbleNode / HUDNode（纯 SK）
-│   ├── Support/                 # AppDelegate / ViewController / Info.plist
+│   ├── Support/                 # AppDelegate / ViewController / ServerSettings / Info.plist
 │   └── Resources.xcassets       # 程序化生成的全部素材
-├── WhalePetTests/               # 13 个纯逻辑单元测试
+├── WhalePetTests/               # 23 个纯逻辑单元测试（宠物状态机 + 服务器设置）
 ├── Tools/art/import_upstream.py # 上游立绘导入（dsh-whale-musume, MIT）
 ├── Tools/art/generate_assets.py # 背景/特效生成器（原创）
 ├── Tools/scripts/check.py       # Linux 静态自检

@@ -19,6 +19,9 @@ final class PetNode: SKNode {
         .sleep: "pet_sleep",
         .drag:  "pet_drag",
         .play:  "pet_play",
+        .listening: "pet_happy",
+        .thinking: "pet_swim",
+        .speaking: "pet_greet",
     ]
 
     /// 逻辑尺寸（点）：导入脚本统一为 420×420 画布、底部对齐。
@@ -100,6 +103,15 @@ final class PetNode: SKNode {
         case .play:
             runBounce(height: 20, period: 0.55)
             runSway(angle: 0.12, period: 0.55)
+        case .listening:
+            runBob(amplitude: 8, period: 1.2)
+            runBreath()
+        case .thinking:
+            runBob(amplitude: 4, period: 2.0)
+            runSway(angle: 0.06, period: 2.0)
+        case .speaking:
+            runBob(amplitude: 6, period: 0.8)
+            runBreath()
         }
     }
 
@@ -114,8 +126,8 @@ final class PetNode: SKNode {
     private func runBreath(slow: Bool = false) {
         let t: TimeInterval = slow ? 2.2 : 1.5
         let breath = SKAction.sequence([
-            .scaleY(1.012, duration: t),
-            .scaleY(1.0, duration: t),
+            .scaleY(to:1.012, duration: t),
+            .scaleY(to:1.0, duration: t),
         ])
         sprite.run(.repeatForever(breath), withKey: "breath")
     }
@@ -147,8 +159,8 @@ final class PetNode: SKNode {
 
     private func runSquishLoop() {
         let s = SKAction.sequence([
-            .scaleX(1.04, y: 0.96, duration: 0.25),
-            .scaleX(0.98, y: 1.03, duration: 0.25),
+            .scaleX(to:1.04, y: 0.96, duration: 0.25),
+            .scaleX(to:0.98, y: 1.03, duration: 0.25),
         ])
         sprite.run(.repeatForever(s), withKey: "squishloop")
     }
@@ -172,10 +184,12 @@ final class PetNode: SKNode {
 
     /// 摸头一次性 Q 弹反馈。
     func squish() {
+        // 避免与 happy 状态的循环缩放同时写同一节点。
+        sprite.removeAction(forKey: "squishloop")
         sprite.removeAction(forKey: "squish")
         let s = SKAction.sequence([
-            .scaleX(1.08, y: 0.90, duration: 0.08),
-            .scaleX(0.96, y: 1.05, duration: 0.10),
+            .scaleX(to:1.08, y: 0.90, duration: 0.08),
+            .scaleX(to:0.96, y: 1.05, duration: 0.10),
             .scale(to: 1.0, duration: 0.10),
         ])
         sprite.run(s, withKey: "squish")

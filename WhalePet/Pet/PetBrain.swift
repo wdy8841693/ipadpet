@@ -28,22 +28,37 @@ struct PetBrain {
         transition(to: .happy)
     }
 
-    mutating func feed() {
-        guard state != .sleep else { return }   // 睡着了不进食
+    /// 返回是否真正执行，渲染层只在成功时播放特效并计数。
+    @discardableResult
+    mutating func feed() -> Bool {
+        guard state != .sleep else { return false }   // 睡着了不进食
         vitals.feed()
         transition(to: .eat)
+        return true
     }
 
-    mutating func playBall() {
-        guard state != .sleep else { return }
+    @discardableResult
+    mutating func playBall() -> Bool {
+        guard state != .sleep else { return false }
         vitals.pet(amount: 8)
         vitals.energy -= 5
         vitals.clamp()
         transition(to: .play)
+        return true
     }
 
     mutating func toggleSleep() {
         transition(to: state == .sleep ? .idle : .sleep)
+    }
+
+    mutating func beginVoiceInteraction(_ state: PetState) {
+        guard state.isVoiceInteraction else { return }
+        transition(to: state)
+    }
+
+    mutating func endVoiceInteraction() {
+        guard state.isVoiceInteraction else { return }
+        transition(to: .idle)
     }
 
     // MARK: - 时间推进

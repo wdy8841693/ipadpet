@@ -16,10 +16,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
+        // 先停语音再让场景存档：退后台不再监听麦克风。
+        (window?.rootViewController as? PetViewController)?.appWillResign()
         (window?.rootViewController as? PetViewController)?.scene?.appWillResign()
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        (window?.rootViewController as? PetViewController)?.appDidBecomeActive()
         (window?.rootViewController as? PetViewController)?.scene?.appDidBecomeActive()
     }
 }

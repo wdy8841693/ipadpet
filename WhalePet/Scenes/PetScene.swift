@@ -74,6 +74,8 @@ final class PetScene: SKScene {
         pet.baseScale = petScaleForScreen()
         clampPetPosition()
         layoutBackground()
+        // 旋转后屏幕尺寸变化，旧移动目标可能已出屏，直接放弃。
+        moveTarget = nil
     }
 
     // MARK: - 帧循环
@@ -128,6 +130,8 @@ final class PetScene: SKScene {
             moveTarget = CGPoint(x: pet.position.x, y: floorStandY())
         case .drag:
             moveTarget = nil
+        case .listening, .thinking, .speaking:
+            moveTarget = nil   // 语音交互站定
         }
         if let line = dialogue.line(for: brain.state, wellbeing: brain.vitals.wellbeing,
                                     name: store.data.petName), brain.state != .idle {
@@ -220,16 +224,27 @@ final class PetScene: SKScene {
     private func handleHUD(_ action: HUDNode.Action) {
         switch action {
         case .feed:
-            brain.feed()
+            // 睡着时不投喂：不计数、不播特效。
+            guard brain.feed() else {
+                showSpeech("zzZ……（睡得香，吃不下）")
+                return
+            }
             store.recordFeed()
             spawnFish()
         case .play:
-            brain.playBall()
+            guard brain.playBall() else {
+                showSpeech("zzZ……（梦里已经在玩了）")
+                return
+            }
             spawnBubbleBall()
         case .sleep:
             brain.toggleSleep()
         case .rename:
             onRenameRequest?()
+        case .mic:
+            onMicRequest?()
+        case .settings:
+            onSettingsRequest?()
         }
         pet.applyState(brain.state, wellbeing: brain.vitals.wellbeing)
         onStateChanged()
@@ -238,6 +253,9 @@ final class PetScene: SKScene {
 
     /// 由 ViewController 注入：弹 UIKit 输入框改名。
     var onRenameRequest: (() -> Void)?
+    /// 由 ViewController 注入：手动语音指令 / 打开服务器设置。
+    var onMicRequest: (() -> Void)?
+    var onSettingsRequest: (() -> Void)?
 
     func renamePet(to name: String) {
         store.rename(name)
@@ -284,14 +302,52 @@ final class PetScene: SKScene {
     }
 
     private func positionSpeechBubble() {
-        // 气泡在头顶上方（立绘顶部 + 余量）
-        speechBubble.position = CGPoint(x: pet.position.x,
-                                        y: pet.position.y + PetNode.nominalSize.height * pet.baseScale + 8)
+        // 气泡在头顶上方（立绘顶部 + 余量），并约束在屏幕内。
+        let w = speechBubble.contentSize.width
+        let x = min(max(pet.position.x, w / 2 + 12), size.width - w / 2 - 12)
+        var y = pet.position.y + PetNode.nominalSize.height * pet.baseScale + 8
+        let topLimit = size.height - speechBubble.contentSize.height - 12
+        if y > topLimit {
+            // 头顶放不下：改放脚边，避免顶出屏幕。
+            y = max(pet.position.y - speechBubble.contentSize.height - 16, 12)
+        }
+        speechBubble.position = CGPoint(x: x, y: y)
     }
 
-    private func showSpeech(_ text: String) {
-        speechBubble.show(text: text)
+    private func showSpeech(_ text: String, duration: TimeInterval = 4.0) {
+        speechBubble.show(text: text, duration: duration)
         positionSpeechBubble()
+    }
+
+    // MARK: - 语音状态（由 ViewController 的 VoiceController 回调驱动）
+
+    /// petState 为 nil 表示语音回闲置（等待唤醒等无专属动画的状态）。
+    func setVoiceState(_ petState: PetState?, displayText: String?) {
+        if let s = petState {
+            if brain.state != s { brain.beginVoiceInteraction(s) }
+            moveTarget = nil                      // 说话/思考时站定
+            pet.applyState(brain.state, wellbeing: brain.vitals.wellbeing)
+        } else if brain.state.isVoiceInteraction {
+            brain.endVoiceInteraction()
+            pet.applyState(brain.state, wellbeing: brain.vitals.wellbeing)
+            onStateChanged()
+        }
+        hudNode.updateVoice(displayText: displayText, isActive: displayText != nil)
+    }
+
+    /// 语音识别到的指令文本上屏。
+    func showVoiceTranscript(_ text: String) {
+        showSpeech(text, duration: 5)
+    }
+
+    /// DSH 回复上屏（播报期间停留更久）。
+    func showVoiceResponse(_ text: String) {
+        showSpeech(text, duration: 10)
+    }
+
+    /// 语音出错提示。
+    func showVoiceError(_ message: String) {
+        showSpeech("（\(message)）", duration: 5)
     }
 
     // MARK: - 背景与粒子（轻量）

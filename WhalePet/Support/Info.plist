@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- 该文件由 project.yml 的 info.properties 托管；xcodegen generate 时会重写。
-     手工维护时请保持与 project.yml 一致。 -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>zh_CN</string>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>鲸鱼娘DSH</string>
 	<key>CFBundleExecutable</key>
@@ -19,16 +17,22 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>1.2.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>UIApplicationSceneManifest</key>
+	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>需要访问局域网内你自己部署的 WhalePet 桥接服务器。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音唤醒（"小鲸小鲸"）与语音指令识别，音频仅在局域网内发送到你的桥接服务器。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>语音指令的识别在你的服务器上完成，此权限用于麦克风音频采集。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiresFullScreen</key>

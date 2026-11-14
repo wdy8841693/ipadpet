@@ -1,5 +1,11 @@
 # macOS / Xcode
 .DS_Store
+# Samba/macOS AppleDouble 元数据垃圾（gitignore 不支持行内注释，须独占一行）
+._*
+
+# 本地工作副本（git 历史已有 v1.1.0 tag，无需目录备份）
+.backup-v1.1.0/
+.workbuddy/
 *.xcuserstate
 xcuserdata/
 DerivedData/
@@ -15,6 +21,9 @@ WhalePet.xcodeproj/
 __pycache__/
 *.pyc
 .venv/
+
+# 桥接服务器本地配置（含真实 token / API key，绝不入库）
+Server/.env
 
 # 素材中间产物（最终 PNG 入库）
 Tools/art/out_raw/

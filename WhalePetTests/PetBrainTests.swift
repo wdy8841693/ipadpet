@@ -136,4 +136,105 @@ final class PetBrainTests: XCTestCase {
         XCTAssertEqual(reloaded.data.totalFeeds, 1)
         try? FileManager.default.removeItem(at: dir)
     }
+
+    // MARK: - 语音交互状态
+
+    func testFeedWhileSleepingFails() {
+        var b = PetBrain()
+        b.toggleSleep()
+        XCTAssertFalse(b.feed())          // 睡着不进食，且告知失败
+        XCTAssertEqual(b.state, .sleep)
+    }
+
+    func testVoiceInteractionStatesNotAutonomous() {
+        for s in [PetState.listening, .thinking, .speaking] {
+            XCTAssertFalse(s.isAutonomous)
+            XCTAssertTrue(s.isVoiceInteraction)
+            XCTAssertNil(s.baseDuration)   // 由外部事件结束
+        }
+        XCTAssertFalse(PetState.idle.isVoiceInteraction)
+    }
+
+    func testVoiceInteractionOverridesAndEnds() {
+        var b = PetBrain()
+        b.beginVoiceInteraction(.listening)
+        XCTAssertEqual(b.state, .listening)
+        // 语音状态不超时切换（duration = nil → infinity）
+        for _ in 0..<200 { b.tick(dt: 0.5, rng: &rng) }
+        XCTAssertEqual(b.state, .listening)
+        b.beginVoiceInteraction(.thinking)
+        XCTAssertEqual(b.state, .thinking)
+        b.endVoiceInteraction()
+        XCTAssertEqual(b.state, .idle)
+        // 非语音状态调用 endVoiceInteraction 无副作用
+        b.petHead()
+        b.endVoiceInteraction()
+        XCTAssertEqual(b.state, .happy)
+    }
+
+    func testBeginVoiceRejectsNonVoiceState() {
+        var b = PetBrain()
+        b.beginVoiceInteraction(.idle)    // 非法入参被忽略
+        XCTAssertEqual(b.state, .idle)
+    }
+}
+
+// MARK: - 服务器设置
+
+final class ServerSettingsTests: XCTestCase {
+    private final class FakeKeychain: KeychainReading {
+        var storage: [String: String] = [:]
+        func readString(service: String, account: String) -> String? {
+            storage["\(service)/\(account)"]
+        }
+        func writeString(_ value: String, service: String, account: String) {
+            storage["\(service)/\(account)"] = value
+        }
+    }
+
+    private func makeSettings() -> (ServerSettings, UserDefaults, FakeKeychain) {
+        let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
+        let keychain = FakeKeychain()
+        return (ServerSettings(defaults: defaults, keychain: keychain), defaults, keychain)
+    }
+
+    func testNormalizeURLAcceptsHTTPIPWithPort() throws {
+        let url = try ServerSettings.normalizeServerURL("http://192.168.1.10:8787")
+        XCTAssertEqual(url.absoluteString, "http://192.168.1.10:8787")
+    }
+
+    func testNormalizeURLAcceptsHTTPSPort() throws {
+        let url = try ServerSettings.normalizeServerURL("https://pet.lan:9000/")
+        XCTAssertEqual(url.absoluteString, "https://pet.lan:9000")
+    }
+
+    func testNormalizeURLDropsPathAndQuery() throws {
+        let url = try ServerSettings.normalizeServerURL("http://192.168.1.10:8787/api/health?x=1")
+        XCTAssertEqual(url.absoluteString, "http://192.168.1.10:8787")
+    }
+
+    func testNormalizeURLRejectsBadInput() {
+        XCTAssertThrowsError(try ServerSettings.normalizeServerURL("192.168.1.10:8787"))   // 无协议
+        XCTAssertThrowsError(try ServerSettings.normalizeServerURL("ftp://192.168.1.10"))  // 非法协议
+        XCTAssertThrowsError(try ServerSettings.normalizeServerURL("http://"))             // 无主机
+        XCTAssertThrowsError(try ServerSettings.normalizeServerURL("  "))
+    }
+
+    func testConfiguredRequiresURLAndToken() throws {
+        let (settings, _, keychain) = makeSettings()
+        XCTAssertFalse(settings.isConfigured)
+        settings.serverURL = try ServerSettings.normalizeServerURL("http://192.168.1.10:8787")
+        XCTAssertFalse(settings.isConfigured)              // 有地址没令牌
+        settings.token = "a-token-value-0123456789"
+        XCTAssertTrue(settings.isConfigured)
+        XCTAssertEqual(keychain.storage["whalepet/serverToken"], "a-token-value-0123456789")
+    }
+
+    func testSessionIDStable() {
+        let (settings, _, _) = makeSettings()
+        let a = settings.sessionID
+        let b = settings.sessionID
+        XCTAssertEqual(a, b)
+        XCTAssertTrue(a.hasPrefix("pet-"))
+    }
 }

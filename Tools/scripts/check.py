@@ -30,9 +30,14 @@ def bad(msg):
     print(f"  ✗ {msg}")
 
 
+def _real_files(paths):
+    """过滤 macOS/Samba 产生的 AppleDouble 垃圾文件（._*，二进制元数据）。"""
+    return [p for p in paths if not p.name.startswith("._")]
+
+
 def check_swift_balance():
     print("[1] Swift 括号配平")
-    for f in sorted(ROOT.glob("WhalePet*/**/*.swift")):
+    for f in sorted(_real_files(ROOT.glob("WhalePet*/**/*.swift"))):
         src = f.read_text(encoding="utf-8")
         # 去掉字符串与注释后数括号
         stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', src)
@@ -71,13 +76,14 @@ def check_project():
 def check_assets():
     print("[3] 纹理引用一致性")
     root = ROOT / "WhalePet/Resources.xcassets"
-    sets = {p.name.removesuffix(".imageset") for p in root.glob("*.imageset")}
+    sets = {p.name.removesuffix(".imageset")
+            for p in _real_files(root.glob("*.imageset"))}
     referenced = set()
-    for f in ROOT.glob("WhalePet/**/*.swift"):
+    for f in _real_files(ROOT.glob("WhalePet/**/*.swift")):
         src = f.read_text()
         referenced |= set(re.findall(r'imageNamed:\s*"([^"]+)"', src))
-        # 状态→纹理映射表里的字符串字面量（如 .idle: "pet_idle"）
-        referenced |= set(re.findall(r':\s*"(pet_[a-z_]+)"', src))
+        # 状态→纹理映射表 / 赋值里的字符串字面量（如 .idle: "pet_idle"、name = "pet_sad"）
+        referenced |= set(re.findall(r'[:=]\s*"(pet_[a-z_]+)"', src))
     missing = referenced - sets
     if missing:
         bad(f"代码引用了不存在的纹理: {sorted(missing)}")
@@ -106,14 +112,15 @@ def check_memory_budget():
     except ImportError:
         print("  · 跳过（无 Pillow）")
         return
+    pngs = _real_files((ROOT / "WhalePet/Resources.xcassets").rglob("*.png"))
     total = 0
-    for png in (ROOT / "WhalePet/Resources.xcassets").rglob("*.png"):
+    for png in pngs:
         with Image.open(png) as im:
             total += im.width * im.height * 4
     mb = total / 1024 / 1024
     # 运行时只加载 10 张立绘 + 背景 + 2 特效；AppIcon 不进显存
     runtime = 0
-    for png in (ROOT / "WhalePet/Resources.xcassets").rglob("*.png"):
+    for png in pngs:
         if "AppIcon" in str(png):
             continue
         with Image.open(png) as im:
@@ -133,12 +140,71 @@ def check_tests():
         return
     src = t.read_text()
     n = len(re.findall(r"func test\w+", src))
-    for key in ["PetBrain", "PetVitals", "PetStore"]:
+    for key in ["PetBrain", "PetVitals", "PetStore", "ServerSettings"]:
         if key in src:
             ok(f"覆盖 {key}")
         else:
             bad(f"未覆盖 {key}")
     ok(f"共 {n} 个测试用例")
+
+
+def check_voice_permissions():
+    print("[6] 语音/本地网络权限声明")
+    with open(ROOT / "WhalePet/Support/Info.plist", "rb") as fp:
+        plist = plistlib.load(fp)
+    for key in ["NSMicrophoneUsageDescription",
+                "NSLocalNetworkUsageDescription"]:
+        if isinstance(plist.get(key), str) and plist[key]:
+            ok(key)
+        else:
+            bad(f"缺少 {key}")
+    ats = plist.get("NSAppTransportSecurity", {})
+    if ats.get("NSAllowsLocalNetworking") is True:
+        ok("ATS NSAllowsLocalNetworking（仅放行内网 HTTP）")
+    else:
+        bad("ATS 未配置 NSAllowsLocalNetworking")
+    # 只放行本地网络，不允许任意明文 HTTP。
+    if ats.get("NSAllowsArbitraryLoads") is True:
+        bad("ATS NSAllowsArbitraryLoads=true 过宽，请移除")
+    else:
+        ok("未启用 NSAllowsArbitraryLoads")
+
+
+def check_server():
+    print("[7] 桥接服务器（Python 语法 + 纯逻辑测试）")
+    server_dir = ROOT / "Server"
+    if not server_dir.exists():
+        bad("缺少 Server/ 目录")
+        return
+    import py_compile
+    import subprocess
+    py_files = _real_files(
+        list((server_dir / "whalepet_bridge").glob("*.py"))
+        + list((server_dir / "scripts").glob("*.py"))
+        + [server_dir / "run.py"])
+    broken = False
+    for f in py_files:
+        try:
+            py_compile.compile(str(f), doraise=True)
+        except py_compile.PyCompileError as e:
+            bad(f"{f.name}: 语法错误 {e}")
+            broken = True
+    if not broken:
+        ok(f"{len(py_files)} 个 Python 文件语法通过")
+    if not (server_dir / ".env.example").exists():
+        bad("缺少 Server/.env.example")
+    else:
+        ok(".env.example 存在")
+    # 纯逻辑测试不依赖 aiohttp/模型，可直接跑。
+    result = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+        cwd=str(server_dir), capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        m = re.search(r"Ran (\d+) tests", result.stdout + result.stderr)
+        ok(f"服务器纯逻辑测试通过（{m.group(1) if m else '?'} 个用例）")
+    else:
+        bad(f"服务器测试失败:\n{result.stderr[-500:]}")
 
 
 def main():
@@ -147,6 +213,8 @@ def main():
     check_assets()
     check_memory_budget()
     check_tests()
+    check_voice_permissions()
+    check_server()
     print()
     if FAIL:
         print(f"自检失败：{FAIL} 个问题")

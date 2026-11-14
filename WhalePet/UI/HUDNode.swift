@@ -1,8 +1,8 @@
 import SpriteKit
 
-/// 顶部状态条 + 底部操作按钮。全部 SKNode，触摸由 Scene 分发。
+/// 顶部状态条 + 底部操作按钮 + 语音状态。全部 SKNode，触摸由 Scene 分发。
 final class HUDNode: SKNode {
-    enum Action { case feed, play, sleep, rename }
+    enum Action { case feed, play, sleep, rename, mic, settings }
 
     var onAction: ((Action) -> Void)?
 
@@ -16,12 +16,20 @@ final class HUDNode: SKNode {
     private var bars: [Bar] = []          // satiety / mood / energy
     private var buttons: [(node: SKNode, action: Action, name: String)] = []
     private var sleepButtonLabel: SKLabelNode?
+    private var micButtonLabel: SKLabelNode?
     private let panel = SKShapeNode()
     private var lastBarValues: [Int] = [-1, -1, -1]   // 量化缓存，避免每帧重建路径
+
+    /// 语音状态胶囊（右上角）：文字 + 颜色随状态变化。
+    private let voicePill = SKShapeNode()
+    private let voiceLabel = SKLabelNode(fontNamed: "PingFangSC-Regular")
+    private var voiceHidden = true
+    private var lastVoiceText = ""
 
     init(sceneSize: CGSize) {
         super.init()
         buildBars()
+        buildVoicePill()
         buildButtons()
         layout(sceneSize: sceneSize)
     }
@@ -49,6 +57,21 @@ final class HUDNode: SKNode {
         }
     }
 
+    private func buildVoicePill() {
+        voicePill.fillColor = SKColor(white: 0, alpha: 0.35)
+        voicePill.strokeColor = SKColor(white: 1, alpha: 0.5)
+        voicePill.lineWidth = 1
+        voicePill.zPosition = 1
+        voicePill.isHidden = true
+        addChild(voicePill)
+        voiceLabel.fontSize = 13
+        voiceLabel.fontColor = SKColor(white: 1, alpha: 0.95)
+        voiceLabel.verticalAlignmentMode = .center
+        voiceLabel.zPosition = 2
+        voiceLabel.isHidden = true
+        addChild(voiceLabel)
+    }
+
     private func buildButtons() {
         panel.fillColor = SKColor(white: 0, alpha: 0.22)
         panel.strokeColor = .clear
@@ -57,6 +80,8 @@ final class HUDNode: SKNode {
             ("🐟", "投喂", .feed),
             ("🫧", "玩耍", .play),
             ("🌙", "睡觉", .sleep),
+            ("🎙️", "说话", .mic),
+            ("⚙️", "设置", .settings),
             ("✏️", "改名", .rename),
         ]
         for (emoji, title, action) in defs {
@@ -81,6 +106,7 @@ final class HUDNode: SKNode {
             addChild(container)
             buttons.append((container, action, title))
             if action == .sleep { sleepButtonLabel = e }
+            if action == .mic { micButtonLabel = e }
         }
     }
 
@@ -95,6 +121,10 @@ final class HUDNode: SKNode {
                                    cornerWidth: 5, cornerHeight: 5, transform: nil)
             bar.icon.position = CGPoint(x: x - 18, y: y)
         }
+        // 语音胶囊：右上角
+        let pillY = sceneSize.height - 40
+        voicePill.position = CGPoint(x: 0, y: pillY - 12)
+        layoutVoicePill()
         // 按钮：底部居中横排
         let spacing: CGFloat = 86
         let totalW = spacing * CGFloat(buttons.count - 1)
@@ -106,6 +136,21 @@ final class HUDNode: SKNode {
         panel.path = CGPath(roundedRect: CGRect(x: startX - 44, y: y - 48,
                                                 width: totalW + 88, height: 96),
                             cornerWidth: 20, cornerHeight: 20, transform: nil)
+    }
+
+    private func layoutVoicePill() {
+        guard !voiceHidden else { return }
+        let w = max(voiceLabel.frame.width + 28, 80)
+        let h: CGFloat = 26
+        voicePill.path = CGPath(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h),
+                                cornerWidth: 13, cornerHeight: 13, transform: nil)
+        // 靠右对齐（右上角，留 20pt 边距）
+        if let scene = scene {
+            let right = scene.size.width - 20
+            let x = right - voicePill.frame.width / 2
+            voicePill.position = CGPoint(x: x, y: voicePill.position.y)
+            voiceLabel.position = CGPoint(x: x, y: voicePill.position.y)
+        }
     }
 
     func update(vitals: PetVitals, state: PetState) {
@@ -124,6 +169,37 @@ final class HUDNode: SKNode {
         }
         let moon = state == .sleep ? "☀️" : "🌙"
         if sleepButtonLabel?.text != moon { sleepButtonLabel?.text = moon }
+    }
+
+    /// 语音状态显示；voiceState 为 nil 时隐藏胶囊。
+    func updateVoice(displayText: String?, isActive: Bool) {
+        if let text = displayText, isActive {
+            voiceHidden = false
+            if text != lastVoiceText {
+                lastVoiceText = text
+                voiceLabel.text = text
+                layoutVoicePill()
+            }
+            voicePill.isHidden = false
+            voiceLabel.isHidden = false
+            voicePill.run(.fadeIn(withDuration: 0.15))
+        } else if !voiceHidden {
+            voiceHidden = true
+            voicePill.isHidden = true
+            voiceLabel.isHidden = true
+        }
+    }
+
+    /// 语音待唤醒时给麦克风按钮一个呼吸提示。
+    func updateMicHint(active: Bool) {
+        micButtonLabel?.removeAction(forKey: "micpulse")
+        if active {
+            let pulse = SKAction.sequence([
+                .scale(to: 1.25, duration: 0.7),
+                .scale(to: 1.0, duration: 0.7),
+            ])
+            micButtonLabel?.run(.repeatForever(pulse), withKey: "micpulse")
+        }
     }
 
     /// 命中返回 true（Scene 不再把事件传给宠物）。

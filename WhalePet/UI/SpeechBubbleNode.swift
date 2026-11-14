@@ -8,6 +8,9 @@ final class SpeechBubbleNode: SKNode {
     private let label = SKLabelNode(fontNamed: "PingFangSC-Regular")
     private var hideWorkItem: DispatchWorkItem?
 
+    /// 场景据此把气泡约束在屏幕内。
+    var contentSize: CGSize { bg.frame.size }
+
     override init() {
         super.init()
         bg.fillColor = SKColor(white: 1, alpha: 0.94)

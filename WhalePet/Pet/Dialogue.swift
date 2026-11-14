@@ -17,6 +17,12 @@ struct Dialogue {
             pool = ["哇啊啊——放我下来啦！", "晕、晕船了……"]
         case (.play, _):
             pool = ["泡泡球！看我的尾鳍扣杀！", "噗——吹个大泡泡！"]
+        case (.listening, _):
+            pool = ["我在听～", "嗯嗯，请说～"]
+        case (.thinking, _):
+            pool = ["让我想想……", "正在翻深海百科……"]
+        case (.speaking, _):
+            pool = ["听我说～", "是这样哒～"]
         case (_, .hungry):
             pool = ["肚子咕咕叫了……想吃小鱼干", "投喂按钮在右下角哦👉"]
         case (_, .tired):

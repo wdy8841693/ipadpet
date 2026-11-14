@@ -11,6 +11,9 @@ enum PetState: String, Codable, CaseIterable {
     case sleep       // 睡觉：zzZ
     case drag        // 被拖拽：四肢摊开
     case play        // 玩泡泡球
+    case listening   // 唤醒成功，正在聆听指令
+    case thinking    // 已发送给 DSH，等待回答
+    case speaking    // 正在播报回答
 
     /// 该状态的基础时长（秒）。nil 表示由外部事件结束（如 drag）。
     var baseDuration: TimeInterval? {
@@ -23,6 +26,7 @@ enum PetState: String, Codable, CaseIterable {
         case .sleep: return Double.random(in: 20...40)
         case .drag:  return nil
         case .play:  return 6.0
+        case .listening, .thinking, .speaking: return nil
         }
     }
 
@@ -30,6 +34,14 @@ enum PetState: String, Codable, CaseIterable {
     var isAutonomous: Bool {
         switch self {
         case .idle, .walk, .swim, .sleep: return true
+        default: return false
+        }
+    }
+
+    /// 语音交互由 VoiceController 结束，不参与随机行为调度。
+    var isVoiceInteraction: Bool {
+        switch self {
+        case .listening, .thinking, .speaking: return true
         default: return false
         }
     }
