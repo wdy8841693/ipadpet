@@ -1,0 +1,25 @@
+# macOS / Xcode
+.DS_Store
+*.xcuserstate
+xcuserdata/
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# XcodeGen 生成的工程（用 project.yml 重新生成，不入库）
+WhalePet.xcodeproj/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 素材中间产物（最终 PNG 入库）
+Tools/art/out_raw/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
