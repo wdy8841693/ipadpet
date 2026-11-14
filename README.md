@@ -1,10 +1,10 @@
 # 鲸鱼娘 DSH 宠物 🐋‍♀️
 
-一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发水手裙的 Q 版少女，身后一条蓝鲸尾、头侧鲸鳍发饰、头顶小喷水孔。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 分层部件 + 程序化动画，30fps 低功耗运行，无网络、无内购、无第三方运行时依赖。
+一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发女仆裙 Q 版少女，鲸尾 + 鳍耳，立绘来自开源项目 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 整图切换 + 程序化运动动画，30fps 低功耗运行，无网络、无内购、无第三方运行时依赖。
 
 ![预览](docs/preview.png)
 
-> DSH = **D**eep **S**ea **H**ug（深海抱抱）。她是人形少女不是鲸鱼：会迈着小短腿散步、划水巡游、低头打盹、双手捧接小鱼干，被摸头会举手欢呼冒爱心，被拎起来会四肢乱晃喊晕船。
+> DSH = **D**eep **S**ea **H**ug（深海抱抱）。10 张状态立绘（待机/散步/巡游/摸头/投喂/睡觉/拖拽/玩耍/委屈/挥手）+ 漂浮、摇摆、Q 弹、点头等程序化运动。被摸头会脸红冒爱心，被拎起来会晃荡喊晕船。
 
 ## 功能
 
@@ -29,8 +29,8 @@
 |---|---|---|
 | 最低系统 | iPadOS 15.0 | mini 4 最高 15.8.x，不支持 16 |
 | 帧率 | 30 fps | `preferredFramesPerSecond = 30`，省电防发热 |
-| 渲染 | SpriteKit 分层 PNG + SKAction | 无序列帧、无物理引擎、无 SKEffectNode |
-| 纹理显存 | < 10 MB（运行时） | 全部素材含图标 ≈ 8 MB 磁盘 |
+| 渲染 | SpriteKit 整图切换 + SKAction 运动 | 无序列帧、无物理引擎、无 SKEffectNode |
+| 纹理显存 | ≈ 9.7 MB（运行时） | 10 张 420pt 立绘 + 背景 + 特效；磁盘含图标 ≈ 14 MB |
 | 粒子 | 12 个复用 SKShapeNode 气泡 | 不用 SKEmitterNode |
 | 存档 | 每 15s + 退后台时 | 原子写，掉电安全 |
 
@@ -72,15 +72,23 @@ xcodebuild test -project WhalePet.xcodeproj -scheme WhalePet \
 > 注意：Xcode 15+ 默认不带 iOS 15 模拟器运行时，可在 Settings → Platforms 下载；
 > 或直接真机跑测试。部署目标 15.0 用 Xcode 14/15/16 均可编译。
 
-## 重新生成素材
+## 素材来源与再生成
 
-所有美术均为**原创程序化绘制**（Pillow 矢量脚本），无第三方版权素材：
+**角色立绘**来自开源项目 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT，Copyright (c) 2026 Sutera-Diffusus），已随仓库入库，无需联网即可构建。详见 [THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)。
+
+如需更新到上游新版立绘：
 
 ```bash
-python3 Tools/art/generate_assets.py     # 输出到 WhalePet/Resources.xcassets
+cd /tmp && npm pack dsh-whale-musume --registry=https://registry.npmjs.org
+tar xzf dsh-whale-musume-*.tgz
+python3 Tools/art/import_upstream.py --src /tmp/package/assets/generated
 ```
 
-想换配色/造型，改 `Tools/art/generate_assets.py` 顶部的调色板与几何函数即可。
+**背景与特效**（深海渐变/爱心/小鱼干）为原创程序化绘制：
+
+```bash
+python3 Tools/art/generate_assets.py
+```
 
 ## Linux 侧自检（无需 Mac）
 
@@ -100,27 +108,26 @@ python3 Tools/scripts/check.py
 │   │   ├── PetBrain.swift       # 行为调度状态机（可单测）
 │   │   ├── PetStore.swift       # JSON 持久化（可单测）
 │   │   ├── Dialogue.swift       # 台词库
-│   │   └── PetNode.swift        # 人形分层部件（发/头/裙/臂/腿/鲸尾）+ SKAction
+│   │   └── PetNode.swift        # 状态立绘切换 + SKAction 运动动画
 │   ├── Scenes/PetScene.swift    # 主场景：交互/移动/特效/帧循环
 │   ├── UI/                      # SpeechBubbleNode / HUDNode（纯 SK）
 │   ├── Support/                 # AppDelegate / ViewController / Info.plist
 │   └── Resources.xcassets       # 程序化生成的全部素材
 ├── WhalePetTests/               # 13 个纯逻辑单元测试
-├── Tools/art/generate_assets.py # 素材生成器
+├── Tools/art/import_upstream.py # 上游立绘导入（dsh-whale-musume, MIT）
+├── Tools/art/generate_assets.py # 背景/特效生成器（原创）
 ├── Tools/scripts/check.py       # Linux 静态自检
-└── docs/                        # 预览图 / 设计说明 / 致谢
+└── docs/                        # 预览图 / 设计说明 / 第三方声明
 ```
 
 ## 参考与致谢
 
-本项目为原创实现，设计上参考了以下开源桌宠项目的**思路**（未复制其代码或素材）：
-
-- [VPet-Simulator](https://github.com/LorisYounger/VPet)（GPL-3.0）：状态驱动的桌宠行为/数值/互动分层设计。
-- [Shijima-iOS / libshijima](https://github.com/pixelomer/Shijima-Qt)（GPL-3.0）：Shimeji 系桌宠在 iOS 上的行为模拟思路（其 iOS 版依赖越狱注入，本项目走正规 App 路线，不适用其实现）。
-- [N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O)：桌宠"主动求关注"的情感化交互启发。
+- **角色立绘**：[dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）——直接使用了其 10 张状态立绘，声明见 [THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)。
+- **设计思路**（未复制代码/素材）：[VPet-Simulator](https://github.com/LorisYounger/VPet) 的状态+数值架构、[Shijima](https://github.com/pixelomer/Shijima-Qt) 的 Shimeji 行为划分、[N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) 的主动陪伴交互。
 
 详见 [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)。
 
 ## License
 
-MIT（见 [LICENSE](LICENSE)）。素材为本仓库脚本原创生成，可自由修改分发。
+代码与原创素材：MIT（见 [LICENSE](LICENSE)）。
+第三方立绘：MIT（dsh-whale-musume，见 [docs/LICENSE-dsh-whale-musume.txt](docs/LICENSE-dsh-whale-musume.txt)）。

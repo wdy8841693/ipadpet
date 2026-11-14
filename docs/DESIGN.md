@@ -43,23 +43,28 @@ drag 永不超时，只能由 touchesEnded/Cancelled 结束；事件状态结束
 
 离线结算封顶 6h：长期不打开也不会出现"全 0 惨状"，回来先待机打招呼。
 
-## 角色设定：鲸鱼娘 ≠ 鲸鱼
+## 角色素材：直接用开源成品立绘
 
-人形 Q 版少女为主体，鲸元素做点缀：
-- **人**：蓝色长发+呆毛、anime 大眼脸、水手领白色连衣裙、双臂双腿+小皮鞋；
-- **鲸**：身后一条蓝鲸尾（摆动）、头侧两枚鲸鳍发饰（代替兽耳）、头顶小喷水孔（游动/玩耍时喷水）。
+角色立绘来自 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）：
+蓝发女仆裙 Q 版鲸鱼娘（鲸尾+鳍耳），完成度远高于程序化绘制。
+每个状态一张 512×512 RGBA webp，导入脚本裁透明边、统一缩放到 420pt 高、
+底部对齐放入 420×420 画布转 PNG（`Tools/art/import_upstream.py`）。
+
+状态映射：idle→idle-cute / walk→tail-swing / swim→daily-stretch /
+happy→react-head / eat→eat / sleep→sleep / drag→pick-up / play→celebrate /
+低落覆盖→failure / 心情极好随机→greet。
 
 ## 渲染与动画
 
-- 部件分层（鲸尾/后发/腿/臂/裙身/头部容器[脸+刘海+鳍饰+四套表情+腮红+喷水]），
-  zPosition 固定排序，`ignoresSiblingOrder = true` 减少每帧排序。
-- 全部动画为 SKAction 组合：漂浮(bob)、鲸尾摆、走路摆腿摆臂、划水、
-  举手欢呼、捧接投喂、低头打盹、眨眼(压扁表情)、咀嚼(头部微动)、喷水。
-  **零序列帧** → 显存只有十几张小 PNG。
-- 两级容器：`rig`（全身漂浮/摇晃）+ `headRig`（点头/歪头/咀嚼），
-  根节点位置只由场景控制，避免 SKAction 与拖拽/寻路互相覆盖坐标。
+- **整图切换 + 运动动画**：每状态一张立绘，SKAction 负责漂浮(bob)、
+  走路摇摆(waddle)、游动 sway、庆祝弹跳+Q弹、进食点头、睡觉呼吸、拖拽晃荡。
+  不做序列帧（上游是静态立绘），运动变换足以表达"活着的"感觉。
+- 单 sprite + `rig` 运动容器：根节点位置只由场景控制，
+  避免 SKAction 与拖拽/寻路互相覆盖坐标。
+- 锚点底边中心：`position` 即脚底，`floorStandY()` 直接踩沙地。
 - 朝向翻转用根节点 xScale 符号；`baseScale.didSet` 保留符号。
-- 站立基准：鞋底在 rig 坐标 y≈-158，`floorStandY()` 据此抬高根节点使鞋踩沙地。
+- 显存：10 张 420×420 RGBA ≈ 7MB + 背景 3MB ≈ 9.7MB，A8 预算内。
+- `ignoresSiblingOrder = true` 减少每帧排序。
 
 ## A8 性能要点清单
 
@@ -67,7 +72,9 @@ drag 永不超时，只能由 touchesEnded/Cancelled 结束；事件状态结束
 4. HUD 进度条路径按整数量化缓存，不每帧重建 CGPath；
 5. 背景为预渲染渐变 PNG，不用 SKEffectNode 实时模糊；
 6. 台词气泡 DispatchWorkItem 定时隐藏，新台词取消旧任务；
-7. 存档 15s 节流 + 退后台立即写。
+7. 存档 15s 节流 + 退后台立即写；
+8. 立绘统一 420pt 画布（@2x 设备上 840px < 源 512px 的 2 倍放大可接受，
+   且 mini 4 为非 Retina 级 1024×768@2x=2048×1536，实际渲染尺寸约 520px，接近源分辨率）。
 
 ## 已知限制 / 后续路线
 

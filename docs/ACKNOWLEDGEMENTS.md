@@ -1,6 +1,16 @@
 # 参考与致谢
 
-本项目（鲸鱼娘 DSH 宠物）为**原创实现**：全部 Swift 代码与美术素材（程序化生成）均在本仓库内完成，未复制任何第三方项目的代码、贴图或音频。以下开源项目仅在**设计思路**层面提供参考：
+## 直接使用的开源素材
+
+**[dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)**（MIT，Copyright (c) 2026 Sutera-Diffusus）：
+本 App 的鲸鱼娘角色立绘（10 张状态图 + AppIcon）直接来自该项目 npm 包 v2.5.3 的
+`assets/generated/` 目录，仅做尺寸归一化与 webp→PNG 转换。
+完整映射表与许可文本见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 与
+[LICENSE-dsh-whale-musume.txt](LICENSE-dsh-whale-musume.txt)。
+
+## 设计思路参考（未复制代码/素材）
+
+全部 Swift 代码与背景/特效素材为本仓库原创。以下开源项目仅在**设计思路**层面提供参考：
 
 ## VPet-Simulator（虚拟桌宠模拟器）
 - 仓库：https://github.com/LorisYounger/VPet
@@ -24,6 +34,8 @@
 
 ## 其他
 - Apple SpriteKit / SKAction：系统框架，程序化动画的基础。
-- Pillow：素材生成脚本使用的 Python 图像库（BSD 类许可）。
+- Pillow：素材导入/生成脚本使用的 Python 图像库（BSD 类许可）。
 
-若未来引入上述任何项目的代码或素材，须遵守其 GPL-3.0 条款（整体开源并保留声明）；当前版本不存在此义务。
+注意：VPet 默认动画版权归 VUP-Simulator 团队（另有授权条款），Shijima 为 GPL-3.0——
+本项目**未使用**它们的任何素材，仅参考思路，不触发其许可义务。
+实际使用的 dsh-whale-musume 为 MIT，义务仅为保留版权声明（已满足）。

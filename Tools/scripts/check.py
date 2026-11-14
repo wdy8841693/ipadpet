@@ -74,7 +74,10 @@ def check_assets():
     sets = {p.name.removesuffix(".imageset") for p in root.glob("*.imageset")}
     referenced = set()
     for f in ROOT.glob("WhalePet/**/*.swift"):
-        referenced |= set(re.findall(r'imageNamed:\s*"([^"]+)"', f.read_text()))
+        src = f.read_text()
+        referenced |= set(re.findall(r'imageNamed:\s*"([^"]+)"', src))
+        # 状态→纹理映射表里的字符串字面量（如 .idle: "pet_idle"）
+        referenced |= set(re.findall(r':\s*"(pet_[a-z_]+)"', src))
     missing = referenced - sets
     if missing:
         bad(f"代码引用了不存在的纹理: {sorted(missing)}")
@@ -108,10 +111,18 @@ def check_memory_budget():
         with Image.open(png) as im:
             total += im.width * im.height * 4
     mb = total / 1024 / 1024
-    if mb < 24:
-        ok(f"全部纹理 ≈ {mb:.1f} MB（含 AppIcon；运行时背景+部件 < 10MB）")
+    # 运行时只加载 10 张立绘 + 背景 + 2 特效；AppIcon 不进显存
+    runtime = 0
+    for png in (ROOT / "WhalePet/Resources.xcassets").rglob("*.png"):
+        if "AppIcon" in str(png):
+            continue
+        with Image.open(png) as im:
+            runtime += im.width * im.height * 4
+    rmb = runtime / 1024 / 1024
+    if mb < 32 and rmb < 16:
+        ok(f"磁盘纹理 ≈ {mb:.1f} MB；运行时显存 ≈ {rmb:.1f} MB（A8 预算内）")
     else:
-        bad(f"纹理总量 {mb:.1f} MB 超出 A8 预算")
+        bad(f"纹理总量 {mb:.1f} MB / 运行时 {rmb:.1f} MB 超出 A8 预算")
 
 
 def check_tests():
