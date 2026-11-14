@@ -208,9 +208,11 @@ final class PetScene: SKScene {
     }
 
     private func petHitTest(_ p: CGPoint) -> Bool {
-        let half = CGSize(width: PetNode.nominalSize.width * pet.baseScale * 0.62,
-                          height: PetNode.nominalSize.height * pet.baseScale * 0.62)
-        return abs(p.x - pet.position.x) < half.width && abs(p.y - pet.position.y) < half.height
+        // 人形纵向更长：命中盒覆盖头(+150)到鞋(-158)，宽约 ±110
+        let s = pet.baseScale
+        let dx = abs(p.x - pet.position.x)
+        let dy = p.y - pet.position.y
+        return dx < 110 * s && dy > -165 * s && dy < 160 * s
     }
 
     // MARK: - HUD 动作
@@ -269,18 +271,21 @@ final class PetScene: SKScene {
 
     private func floorY() -> CGFloat { size.height * floorRatio }
     private func floorStandY() -> CGFloat {
-        floorY() + PetNode.nominalSize.height * pet.baseScale * 0.42
+        // 鞋底在 rig 坐标 y≈-158；站立时根节点抬高使鞋踩沙地
+        floorY() + 158 * pet.baseScale
     }
 
     private func clampPetPosition() {
-        let m: CGFloat = 60
+        let m: CGFloat = 70
         pet.position.x = min(max(pet.position.x, m), size.width - m)
-        pet.position.y = min(max(pet.position.y, floorStandY() * 0.8), size.height - 120)
+        // 下限：鞋不陷进沙地太多；上限：头不顶出屏幕
+        pet.position.y = min(max(pet.position.y, floorStandY() - 30), size.height - 180 * pet.baseScale)
     }
 
     private func positionSpeechBubble() {
+        // 头顶约在 rig 坐标 y≈+150（呆毛再高一点）
         speechBubble.position = CGPoint(x: pet.position.x,
-                                        y: pet.position.y + PetNode.nominalSize.height * pet.baseScale * 0.62)
+                                        y: pet.position.y + 165 * pet.baseScale)
     }
 
     private func showSpeech(_ text: String) {
@@ -347,7 +352,7 @@ final class PetScene: SKScene {
     private func spawnHearts(at p: CGPoint) {
         for i in 0..<3 {
             let heart = SKSpriteNode(imageNamed: "fx_heart")
-            heart.position = CGPoint(x: p.x + CGFloat(i - 1) * 34, y: p.y + 60)
+            heart.position = CGPoint(x: p.x + CGFloat(i - 1) * 34, y: p.y + 120 * pet.baseScale)
             heart.zPosition = 40
             heart.setScale(0.7)
             addChild(heart)
@@ -360,12 +365,14 @@ final class PetScene: SKScene {
     }
 
     private func spawnFish() {
+        // 小鱼干飞向嘴边（头部高度）
+        let mouth = CGPoint(x: pet.position.x, y: pet.position.y + 50 * pet.baseScale)
         let fish = SKSpriteNode(imageNamed: "fx_fish")
-        fish.position = CGPoint(x: pet.position.x + (facingRight ? -70 : 70), y: pet.position.y + 30)
+        fish.position = CGPoint(x: mouth.x + (facingRight ? -90 : 90), y: mouth.y + 20)
         fish.zPosition = 40
         addChild(fish)
         fish.run(.sequence([
-            .move(to: CGPoint(x: pet.position.x, y: pet.position.y + 10), duration: 0.5),
+            .move(to: mouth, duration: 0.5),
             .scale(to: 0.1, duration: 0.3),
             .removeFromParent(),
         ]))
@@ -377,7 +384,7 @@ final class PetScene: SKScene {
         ball.fillColor = SKColor(red: 0.6, green: 0.85, blue: 1, alpha: 0.25)
         ball.lineWidth = 2
         ball.zPosition = 39
-        ball.position = CGPoint(x: pet.position.x, y: pet.position.y + 120)
+        ball.position = CGPoint(x: pet.position.x, y: pet.position.y + 170 * pet.baseScale)
         addChild(ball)
         let bounce = SKAction.sequence([
             .moveBy(x: 60, y: -80, duration: 0.5),

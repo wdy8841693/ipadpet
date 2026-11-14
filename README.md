@@ -1,17 +1,17 @@
-# 鲸鱼娘 DSH 宠物 🐋
+# 鲸鱼娘 DSH 宠物 🐋‍♀️
 
-一只住在 iPad 全屏海底世界里的 Q 版蓝鲸娘桌宠。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 分层部件 + 程序化动画，30fps 低功耗运行，无网络、无内购、无第三方运行时依赖。
+一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发水手裙的 Q 版少女，身后一条蓝鲸尾、头侧鲸鳍发饰、头顶小喷水孔。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 分层部件 + 程序化动画，30fps 低功耗运行，无网络、无内购、无第三方运行时依赖。
 
 ![预览](docs/preview.png)
 
-> DSH = **D**eep **S**ea **H**ug（深海抱抱）。她会散步、巡游、睡觉、吃小鱼干，被摸头会冒爱心，被拎起来会晕船。
+> DSH = **D**eep **S**ea **H**ug（深海抱抱）。她是人形少女不是鲸鱼：会迈着小短腿散步、划水巡游、低头打盹、双手捧接小鱼干，被摸头会举手欢呼冒爱心，被拎起来会四肢乱晃喊晕船。
 
 ## 功能
 
 | 交互 | 效果 |
 |---|---|
-| 轻点鲸鱼娘 | 摸头：Q 弹挤压 + 爱心 + 心情↑ |
-| 按住拖动 | 拎起来到处放（拖拽态四肢摊开） |
+| 轻点鲸鱼娘 | 摸头：Q 弹挤压 + 举手欢呼 + 爱心 + 心情↑ |
+| 按住拖动 | 拎起来到处放（拖拽态四肢乱晃） |
 | 🐟 投喂 | 小鱼干飞进嘴里，饱食↑ |
 | 🫧 玩耍 | 泡泡球弹跳，心情↑ 精力↓ |
 | 🌙 睡觉 | 入睡恢复精力，再点唤醒 |
@@ -100,7 +100,7 @@ python3 Tools/scripts/check.py
 │   │   ├── PetBrain.swift       # 行为调度状态机（可单测）
 │   │   ├── PetStore.swift       # JSON 持久化（可单测）
 │   │   ├── Dialogue.swift       # 台词库
-│   │   └── PetNode.swift        # 分层部件 + SKAction 动画
+│   │   └── PetNode.swift        # 人形分层部件（发/头/裙/臂/腿/鲸尾）+ SKAction
 │   ├── Scenes/PetScene.swift    # 主场景：交互/移动/特效/帧循环
 │   ├── UI/                      # SpeechBubbleNode / HUDNode（纯 SK）
 │   ├── Support/                 # AppDelegate / ViewController / Info.plist
