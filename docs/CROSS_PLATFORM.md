@@ -1167,3 +1167,55 @@ whalepet-main
 - Apple `supportsOnDeviceRecognition`：https://developer.apple.com/documentation/speech/sfspeechrecognizer/supportsondevicerecognition
 - Android `SpeechRecognizer`：https://developer.android.com/reference/android/speech/SpeechRecognizer
 - Flutter 桌面窗口基础能力可参考 `window_manager`，但本项目仍需保留原生 `DesktopWindowAdapter`，不能只依赖插件默认行为。
+
+---
+
+## 17. 实施记录（2026-11-15）
+
+### 17.1 已完成
+
+| 阶段 | 状态 | 产物 |
+|---|---|---|
+| A 服务端解耦 | ✅ | 插件 0.4.0：`agent-service.js` / `client-hub.js` / `agent-channel.js` / `reply-text.js`，旧 `/api/audio` 未改 |
+| B Flutter 宠物核心 | ✅ | `Clients/whalepet_flutter/lib/core/`（纯 Dart，66 个测试） |
+| E Windows 桌宠 | ✅ 第一版 | 透明置顶窗口、Win32 FFI 适配层、`/api/agent` 客户端、系统 TTS、设置/聊天面板 |
+| C Android / D macOS | ⏳ | 未开始 |
+| Windows 本地语音（KWS/ASR） | ⏳ | 见 17.3 |
+
+Windows 版实际落地内容：
+
+- 窗口：`windows/runner/main.cpp` 里 `WS_EX_LAYERED + WS_EX_TOOLWINDOW + WS_EX_TOPMOST`、
+  `DwmExtendFrameIntoClientArea(-1)`、无边框、不进任务栏；
+- 适配层：`lib/platform/desktop_window/win32_window.dart` 直接 `dart:ffi` 调 user32
+  （`SetWindowPos` / `GetMonitorInfoW` / `SetLayeredWindowAttributes` / `ReleaseCapture` +
+  `WM_NCLBUTTONDOWN` 原生拖拽 / `GetCursorPos` 命中测试 / `GetDpiForWindow` 缩放）；
+- 协议：`lib/core/agent/` 完整实现 §8（hello/ready/command/task/response/announcement/error/
+  voice_config、`event_id` 去重、`last_received_event_id` 补发、1/2/4/8/16/30s 退避、401/403 停止重试）；
+- 播报：`lib/platform/speech_output/powershell_speech.dart`（常驻一个子进程跑 `System.Speech`），
+  文本走 UTF-8 临时文件，规避 OEM 代码页 936 的转码问题；
+- 存储：`%APPDATA%\WhalePet\`，令牌 DPAPI（`CryptProtectData` + 应用附加熵），
+  存档原子写并把 Windows `rename` 覆盖语义的差异补掉；
+- 播报队列：`SpeechQueue` 去重 + 优先级 + 「回答过就不再念做完了」。
+
+### 17.2 与本文档原设计的偏差
+
+| 原设计 | 实际做法 | 原因 |
+|---|---|---|
+| §5 允许用 `window_manager` 等插件 | 全部改用 `dart:ffi` 直连 Win32 | 与插件「零第三方依赖」一致，行为可控，避免插件与 Flutter 版本绑死 |
+| §10.3 托盘图标 | 第一版用宠物右键菜单（含退出/重连/设置） | 自绘托盘需要额外的 `Shell_NotifyIcon` 消息窗口，收益低于成本；菜单已覆盖同样入口 |
+| §10.3 Windows 音频 + sherpa-onnx | 第一版不含本地语音 | 先把「透明窗口 + 协议 + 播报」闭环跑通，语音单独一期（见 17.3） |
+| §7.5 系统 TTS | SAPI 5（`System.Speech`）而非 WinRT | 无额外依赖，系统自带中文音色即可用；WinRT 版本后续可平替同一接口 |
+| 窗口随面板缩放 | 固定 380×560 + 透明区域自动穿透 | 尺寸稳定、命中测试简单；穿透解决了「看不见的矩形挡点击」问题 |
+
+### 17.3 Windows 语音（下一期）
+
+按 §7 的顺序补：
+
+1. `VoiceEngineAdapter` 的 Windows 实现：WASAPI 采集 → 16kHz 单声道 PCM16；
+2. 先接 sherpa-onnx 整段识别（点击说话），再做 KWS 常驻唤醒；
+3. `VoiceSessionCoordinator` 状态机 + `generation` 丢弃迟到回调（§7.2）；
+4. 播报期间闭麦与恢复延迟（§7.8）；
+5. 一句话带命令（§7.7）。
+
+`lib/core/voice/` 已经预留 `SpeechOutputAdapter` 与 `SpeechQueue`，语音识别只需补
+`VoiceEngineAdapter` 与协调器，不动现有 UI 与协议层。

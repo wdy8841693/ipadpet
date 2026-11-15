@@ -12,6 +12,7 @@
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.0** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
+| Windows 桌宠（`Clients/whalepet_flutter/`） | **0.2.0** | Flutter 透明桌宠：宠物数值/互动 + `/api/agent` 文本通道 + 系统 TTS |
 
 ![预览](docs/preview.png)
 
@@ -27,6 +28,7 @@ ipadpet/
 │   ├── Support/              #   AppDelegate / ViewController / 服务器设置（Keychain）
 │   └── Resources.xcassets/   #   立绘与图标（来自上游 MIT 素材）
 ├── WhalePetTests/            # 纯逻辑 XCTest（状态机/数值/存档/配置校验）
+├── Clients/whalepet_flutter/ # 跨平台客户端（纯 Dart 核心 + Windows 桌宠壳）
 ├── Plugin/
 │   └── whalepet-dsh-bridge/  # DSH 插件（Host 网关 + 浏览器设置页，零第三方依赖）
 │       ├── index.js          #   插件入口：会话/人格/权限/任务提醒
@@ -118,6 +120,29 @@ Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）�
 
 点「保存并测试」，提示「连接成功」即可说「小鲸小鲸」。
 
+### 3. Windows 桌宠（`Clients/whalepet_flutter/`）
+
+前置：Windows 10/11 x64 + Flutter SDK + Visual Studio 2022 生成工具的 **C++ 桌面开发**组件
+（MSVC + CMake + Windows SDK，缺一个都会 `flutter doctor` 报 incomplete）。
+
+```bash
+cd Clients/whalepet_flutter
+flutter pub get
+flutter run -d windows        # 调试；或 flutter build windows 出 Release
+```
+
+启动后是一个 380×560 的**透明置顶窗口**，里面只有宠物和气泡：
+
+- 单击宠物摸头、双击打开聊天面板、右键菜单（摸头/投喂/玩/说点什么/设置/睡觉/重连/退出）、按住拖动整窗移动；
+- 鼠标移到透明区域时窗口自动穿透，不挡后面软件的点击；
+- 第一次用先右键 →「设置」，填服务器地址（`http://<DSH 机器 IP>:8787`）与
+  `~/.dsh/whalepet/ipad-token` 的内容。
+
+只发**识别后的文本**（`WS /api/agent`），不再上传持续音频；回答用 Windows 系统 TTS 播报。
+数据在 `%APPDATA%\WhalePet\`：设置明文、令牌 DPAPI 加密、宠物存档原子写。
+第一版**没有本地唤醒/识别**（sherpa-onnx 留到下一阶段），详见
+[客户端 README](Clients/whalepet_flutter/README.md)。
+
 ## 配置（插件）
 
 见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)，常用项：
@@ -140,6 +165,13 @@ python3 Tools/scripts/check.py
 
 # 插件单元/集成测试（53 个）
 cd Plugin/whalepet-dsh-bridge && node --test test/*.test.js
+```
+
+# 跨平台客户端（Windows 桌宠）：核心单测 + 静态分析 + 构建
+cd Clients/whalepet_flutter
+dart test            # 纯 Dart 核心与协议测试
+flutter analyze
+flutter build windows
 ```
 
 Swift 编译与真机验证必须在 macOS + Xcode 上做，Linux 侧只能做静态哨兵。
