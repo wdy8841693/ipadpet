@@ -30,6 +30,7 @@ import { VoiceSession, PHASE, WAKE, voiceConfig } from './session.js'
 import { EnergyVad, FrameSplitter, UtteranceSegmenter } from './vad.js'
 import { attachWebSocketServer } from './ws.js'
 
+const PLUGIN_VERSION = '0.2.0'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 
@@ -446,6 +447,8 @@ export function createBridgeServer({ adapter, config, logger }) {
           ok: true,
           asr: Boolean(health.ready),
           model: health.detail ?? '',
+          // 版本号：用来确认 iPad 连到的是哪一版插件（排障用）。
+          version: PLUGIN_VERSION,
         })
         return
       }
