@@ -11,7 +11,7 @@
 | 部分 | 版本 | 说明 |
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
-| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.2.9** | 局域网网关：ASR / 唤醒词 / 会话 / 任务提醒 |
+| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.3.0** | 局域网网关：ASR / 唤醒词 / 会话 / 任务提醒 |
 
 ![预览](docs/preview.png)
 
@@ -28,8 +28,10 @@ ipadpet/
 │   └── Resources.xcassets/   #   立绘与图标（来自上游 MIT 素材）
 ├── WhalePetTests/            # 纯逻辑 XCTest（状态机/数值/存档/配置校验）
 ├── Plugin/
-│   └── whalepet-dsh-bridge/  # DSH Host 插件（局域网网关，零第三方依赖）
+│   └── whalepet-dsh-bridge/  # DSH 插件（Host 网关 + 浏览器设置页，零第三方依赖）
 │       ├── index.js          #   插件入口：会话/人格/权限/任务提醒
+│       ├── client.js         #   设置页（DSH 设置 → 鲸鱼娘）
+│       ├── src/settings*.js  #   运行时设置存储 + 设置接口
 │       ├── src/              #   传输层（server/ws）、VAD、唤醒词、WAV
 │       ├── test/             #   node:test：纯逻辑 + 真 HTTP/WS + 假 ctx 集成
 │       ├── cordis.patch.yml  #   bundle 配置（端口/权限预设/会话轮换）
@@ -66,7 +68,9 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──�
 | 能力 | 说明 |
 |---|---|
 | 语音唤醒 | 说「**小鲸小鲸**」唤醒，宠物答一句「我在」，接着说指令；也支持一句话带命令 |
+| 设置界面 | DSH 设置 → 「鲸鱼娘」：改人设、唤醒词/应答、其它会话播报、完成播报字数，附 iPad 连接地址与令牌 |
 | 真 Agent | 宠物会话是完整的 DSH Agent：联网检索、读文件、跑命令、多步执行（默认权限 `workspace-write`） |
+| 设置页 | DSH「设置 → 鲸鱼娘」可改人设/唤醒词/播报；保存立即生效（写 `~/.dsh/whalepet/settings.json`）；页面里直接给出 iPad 连接地址与令牌 |
 | 任务提醒 | 前台时宠物用**语音播报**：宠物自己的任务（开始/授权/断线恢复/失败）**以及其它 DSH 会话的任务**（开始/完成/授权）都会报一句；断线期间完成的任务重连后补播 |
 | 不用管会话 | 只有一个长期会话，空闲自动归档（列表不可见），每 24h 自动换新，历史由 DSH 自动压缩 |
 | 本地播报 | 回复经口语化清洗后用 AVSpeechSynthesizer 播放；播报期间自动闭麦防自触发 |

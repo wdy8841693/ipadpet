@@ -30,7 +30,7 @@ import { VoiceSession, PHASE, WAKE, voiceConfig } from './session.js'
 import { EnergyVad, FrameSplitter, UtteranceSegmenter } from './vad.js'
 import { attachWebSocketServer } from './ws.js'
 
-const PLUGIN_VERSION = '0.2.9'
+export const PLUGIN_VERSION = '0.3.0'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 
@@ -80,14 +80,16 @@ export class VoicePipeline {
    * @param {ReturnType<typeof normalizeBridgeConfig>} options.config
    * @param {{info?: Function, warn?: Function, error?: Function}} [options.logger]
    */
-  constructor({ connection, adapter, config, logger, delivery }) {
+  constructor({ connection, adapter, config, logger, delivery, getSettings }) {
     this.connection = connection
     this.adapter = adapter
     this.config = config
     this.logger = logger ?? {}
     /** 跨连接投递状态（断线重连后补发结果）。 */
     this.delivery = delivery
-    this.session = new VoiceSession(new WakeMatcher(config), config.voice)
+    /** 运行时设置（设置页可改）：缺省时退回 config。 */
+    this.getSettings = typeof getSettings === 'function' ? getSettings : () => config
+    this.session = new VoiceSession(this.#wakeMatcher(), config.voice)
     this.vad = new EnergyVad(config.vad)
     this.splitter = new FrameSplitter(config.voice.frameBytes, (frame) => this.#onFrame(frame))
     this.closed = false
@@ -98,8 +100,24 @@ export class VoicePipeline {
     this.generation = 0
     this.currentController = null
     this.helloDone = false
-    /** 只唤醒不说指令时，宠物回一句（空字符串 = 不启用）。 */
-    this.wakeAck = typeof config.wakeAck === 'string' ? config.wakeAck.trim() : '我在'
+  }
+
+  /** 当前唤醒词（设置页可改，新连接生效）。 */
+  #wakePhrase() {
+    const settings = this.getSettings?.() ?? {}
+    const phrase = typeof settings.wakePhrase === 'string' ? settings.wakePhrase.trim() : ''
+    return phrase || this.config.wakePhrase
+  }
+
+  /** 只唤醒不说指令时宠物回的一句（空字符串 = 不启用）。 */
+  #wakeAck() {
+    const settings = this.getSettings?.() ?? {}
+    if (typeof settings.wakeAck === 'string') return settings.wakeAck.trim()
+    return typeof this.config.wakeAck === 'string' ? this.config.wakeAck.trim() : ''
+  }
+
+  #wakeMatcher() {
+    return new WakeMatcher({ wakePhrase: this.#wakePhrase(), aliases: this.config.wakeAliases })
   }
 
   start() {
@@ -111,7 +129,7 @@ export class VoicePipeline {
     this.send({
       ok: true,
       type: 'ready',
-      wake_phrase: this.config.wakePhrase,
+      wake_phrase: this.#wakePhrase(),
       sample_rate: this.config.voice.sampleRate,
     })
   }
@@ -262,7 +280,8 @@ export class VoicePipeline {
         this.send({ type: 'state', value: 'listening' })
         this.#armListenTimeout()
         // 「我在」：App 收到 response 会念出来；说完后仍然处于聆听态（见 playback_end）。
-        if (this.wakeAck) this.send({ type: 'response', text: this.wakeAck })
+        const ack = this.#wakeAck()
+        if (ack) this.send({ type: 'response', text: ack })
       }
       return
     }
@@ -509,7 +528,7 @@ function clampNumber(value, fallback, min, max) {
  * 创建网关服务器（不自动 listen）。
  * @param {{adapter: BridgeAdapter, config: ReturnType<typeof normalizeBridgeConfig>, logger?: object}} options
  */
-export function createBridgeServer({ adapter, config, logger }) {
+export function createBridgeServer({ adapter, config, logger, getSettings }) {
   const log = logger ?? {}
   const accessLog = config.accessLogPath
     ? (line) => {
@@ -619,7 +638,7 @@ export function createBridgeServer({ adapter, config, logger }) {
       return { ok: true }
     },
     onConnection(connection) {
-      const pipeline = new VoicePipeline({ connection, adapter, config, logger: log, delivery })
+      const pipeline = new VoicePipeline({ connection, adapter, config, logger: log, delivery, getSettings })
       pipelines.add(pipeline)
       connection.on('close', () => pipelines.delete(pipeline))
       pipeline.start()

@@ -16,7 +16,9 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { createBridgeServer, normalizeBridgeConfig } from './src/server.js'
+import { createBridgeServer, normalizeBridgeConfig, PLUGIN_VERSION } from './src/server.js'
+import { createSettingsStore } from './src/settings.js'
+import { registerSettingsApi } from './src/settings-api.js'
 
 export const name = 'whalepet-bridge'
 
@@ -185,6 +187,23 @@ export function apply(ctx, config = {}) {
     ? config.voicePersona.trim()
     : VOICE_PERSONA
 
+  // 设置页可改的项：settings.json（用户改过的） > 这份 config 默认值。
+  const settingsStore = createSettingsStore({
+    dataDir,
+    logger,
+    defaults: {
+      voicePersona: persona,
+      wakePhrase: typeof config.wakePhrase === 'string' && config.wakePhrase.trim()
+        ? config.wakePhrase.trim()
+        : '小鲸小鲸',
+      wakeAck: typeof config.wakeAck === 'string' ? config.wakeAck.trim() : '我在',
+      announceOtherSessions: config.announceOtherSessions !== false,
+      announceReplyChars: Number.isFinite(Number(config.announceReplyChars))
+        ? Math.max(0, Math.trunc(Number(config.announceReplyChars)))
+        : 80,
+    },
+  })
+
   const speechToText = ctx.speechToText
   const sessions = ctx.sessionController
   const permissionPresets = typeof ctx.get === 'function' ? ctx.get('permissionPresets') : undefined
@@ -205,6 +224,18 @@ export function apply(ctx, config = {}) {
   }
   /** dshSessionId -> 该 Agent scope 内人格 section 的 disposer。 */
   const personaDisposers = new Map()
+
+  // 设置页改了人设/唤醒词等：撤掉已注入的人格 section，下一次 ask 会重新注入。
+  ctx.effect(() => settingsStore.onChange(() => {
+    for (const dispose of personaDisposers.values()) {
+      try {
+        dispose()
+      } catch {
+        // 忽略
+      }
+    }
+    personaDisposers.clear()
+  }), 'whalepet.settings-persona-refresh')
   let bridge = null
 
   const getWorkspaceRegistry = () => (typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined)
@@ -212,10 +243,6 @@ export function apply(ctx, config = {}) {
   // ---- 其它 DSH 会话的任务播报（宠物当“前台语音通知器”）--------------------
   // 除了宠物自己发起的任务，会话列表里任何会话开始/结束/需要授权时也播报一句。
   // 这里只负责把事件推给当前连着的 iPad；iPad 不在前台时自然丢弃。
-  const announceOtherSessions = config.announceOtherSessions !== false
-  const announceReplyChars = Number.isFinite(Number(config.announceReplyChars))
-    ? Math.max(0, Math.trunc(Number(config.announceReplyChars)))
-    : 80
   const sessionTitles = new Map()
   /** 会话的首条用户消息（标题还没生成时用它当名字）。 */
   const sessionPrompts = new Map()
@@ -225,7 +252,7 @@ export function apply(ctx, config = {}) {
 
   /** 是否是值得播报的「别的会话」。 */
   const shouldAnnounceSession = (sessionId) => {
-    if (!announceOtherSessions || typeof sessionId !== 'string' || !sessionId) return false
+    if (!settingsStore.current().announceOtherSessions || typeof sessionId !== 'string' || !sessionId) return false
     if (sessionId.startsWith(PET_SESSION_PREFIX)) return false
     try {
       const session = sessionRegistry?.get?.(sessionId)
@@ -293,7 +320,7 @@ export function apply(ctx, config = {}) {
   }
 
   /** 读某个会话最后一条 assistant 回复，整理成口语摘要（超长截断）。 */
-  const readSessionReply = async (sessionId, maxChars = announceReplyChars) => {
+  const readSessionReply = async (sessionId, maxChars = settingsStore.current().announceReplyChars) => {
     if (maxChars <= 0) return ''
     try {
       // timeoutMs 必须是正数（0 会被 gateway 以 bad-request 拒绝）。
@@ -695,9 +722,11 @@ export function apply(ctx, config = {}) {
   }
 
   // 启动网关（异步初始化；失败只记录日志，不拖垮宿主进程）。
+  let settingsApiDisposer = null
   ctx.effect(() => {
     const start = async () => {
       await fsp.mkdir(sessionDir, { recursive: true })
+      await settingsStore.load()
       try {
         const meta = await readJson(metaFile, {})
         if (typeof meta?.currentSessionId === 'string' && meta.currentSessionId.startsWith('whalepet-session-')) {
@@ -715,16 +744,38 @@ export function apply(ctx, config = {}) {
         // 排障用访问日志（iPad 每次 health / chat / WS 升级都会记一行）。
         accessLogPath: config.accessLog === false ? '' : path.join(dataDir, 'access.log'),
       })
-      bridge = createBridgeServer({ adapter, config: bridgeConfig, logger })
+      bridge = createBridgeServer({
+        adapter,
+        config: bridgeConfig,
+        logger,
+        getSettings: () => settingsStore.current(),
+      })
       const address = await bridge.listen()
       const rotation = rotateAfterHours > 0 ? `每 ${rotateAfterHours}h 自动换新会话` : '固定单会话'
       logger.info(`whalepet: iPad 网关已监听 http://${address} （宠物会话 ${currentSessionId}，${rotation}，工作目录 ${sessionDir}）`)
+      // 设置页（DSH 设置里新增「鲸鱼娘」）：读写 ~/.dsh/whalepet/settings.json。
+      settingsApiDisposer = registerSettingsApi({
+        ctx,
+        store: settingsStore,
+        config: bridgeConfig,
+        dataDir,
+        version: PLUGIN_VERSION,
+        logger,
+      })
       void archiveLegacySessions()
     }
     start().catch((error) => {
       logger.error(`whalepet: 网关启动失败: ${error?.stack ?? error}`)
     })
     return async () => {
+      if (settingsApiDisposer) {
+        try {
+          settingsApiDisposer()
+        } catch {
+          // 忽略
+        }
+        settingsApiDisposer = null
+      }
       const current = bridge
       bridge = null
       if (current) {

@@ -85,6 +85,16 @@
   越界操作被沙箱拦住；把 `approvalPolicy` / `permissionPreset` 调整可以放宽或收紧。
 - 8787 是明文 HTTP，只用于内网/ZeroTier，不要映射到公网。
 
+## 设置页
+
+- 浏览器端：`client.js` 通过 `window.__ModuleLoader__` 注册 `settings.section`（id `whalepet`）
+  与对应图标，渲染表单；文案走 Client locale 服务（zh/en）。
+- Host 端：`src/settings-api.js` 在 DSH 的 `webServer` 上挂 `/whalepet-api`，
+  首屏 `handshake` 只放行 loopback 并返回一次性令牌，其余请求校验 `x-whalepet-token`。
+- 存储：`src/settings.js` 把用户改动写进 `~/.dsh/whalepet/settings.json`（原子写、0600），
+  运行时读取，优先级 `settings.json` > bundle config > 代码默认；人格变更会撤掉已注入的
+  persona section，下一轮重新注入。
+
 ## 部署
 
 - DSH 由 PM2 托管时，用 `Tools/deploy/dsh-web.sh` 直连本地安装的 dsh（不再每次 npx 解析 registry），

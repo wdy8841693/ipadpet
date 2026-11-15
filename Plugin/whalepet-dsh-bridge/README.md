@@ -98,6 +98,24 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 - **每 24 小时自动换一条新会话**（`rotateAfterHours`）：旧会话归档，新会话继承同一套人格/权限；
   上下文再长也有 DSH 自动压缩兜底，不需要人工清理。
 
+## 设置页（DSH 设置 → 鲸鱼娘）
+
+插件带一个浏览器端设置页（`client.js`，注册到 `settings.section`），不用改 YAML 就能调：
+
+| 项 | 说明 |
+|---|---|
+| 性格设定 | `voicePersona`：宠物会话的 system prompt；保存后下一轮对话生效（会撤掉旧人格 section 重新注入） |
+| 唤醒词 | 改完需要 iPad 重新连接才生效（新连接构造唤醒匹配器） |
+| 唤醒应答 | 「我在」那句；留空关闭 |
+| 其它会话播报 | 对应 `announceOtherSessions` |
+| 完成播报字数 | 对应 `announceReplyChars`（0 = 只报「做完了」） |
+
+- 保存立即生效，**不重启插件**；值写入 `~/.dsh/whalepet/settings.json`（0600，原子写），
+  优先级：`settings.json` > bundle `config` > 代码默认值；
+- 页面里还显示 iPad 连接用的局域网地址与访问令牌（带复制按钮）；
+- Host 侧接口挂在 DSH 自己的 webServer 上：`/whalepet-api/handshake|settings|reset`，
+  同源 + 每次启动随机令牌（握手仅允许 loopback），不会额外暴露端口。
+
 ## 其它会话的任务播报（前台语音通知器）
 
 除了宠物自己发起的任务，插件还会监听本机 DSH 的会话事件：

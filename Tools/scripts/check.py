@@ -191,6 +191,19 @@ def check_plugin():
         bad("cordis.patch.yml 未插入 whalepet-bridge 行")
     else:
         ok("cordis.patch.yml 含 whalepet-bridge 行")
+    if not (plugin / "client.js").exists():
+        bad("缺少 client.js（设置页）")
+    else:
+        ok("client.js 存在（设置页）")
+    exports = manifest.get("exports") or {}
+    if exports.get("./client") != "./client.js":
+        bad("package.json 未导出 ./client")
+    else:
+        ok("package.json 导出 ./client")
+    if not (manifest.get("dsh", {}).get("client") or {}).get("platform"):
+        bad("package.json 缺少 dsh.client.platform（浏览器设置页无法加载）")
+    else:
+        ok("dsh.client.platform 已声明")
     index = (plugin / "index.js").read_text(encoding="utf-8")
     for needle in ["export const name", "export const inject", "export function apply"]:
         if needle in index:
