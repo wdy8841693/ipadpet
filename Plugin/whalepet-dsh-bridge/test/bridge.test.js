@@ -78,7 +78,13 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     const ok = await fetch(`${base}/api/health`, { headers: { Authorization: `Bearer ${TOKEN}` } })
     assert.equal(ok.status, 200)
     const body = await ok.json()
-    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.3.0' })
+    // 旧字段保持不变（iPad 只看 asr/model），新字段给跨平台客户端看。
+    assert.equal(body.ok, true)
+    assert.equal(body.asr, true)
+    assert.equal(body.model, 'mock-sensevoice')
+    assert.equal(body.version, '0.4.0')
+    assert.deepEqual(body.agent, { ready: true })
+    assert.deepEqual(body.protocols, ['audio-v1', 'agent-v2'])
   } finally {
     await bridge.close()
   }

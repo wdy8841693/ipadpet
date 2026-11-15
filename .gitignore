@@ -32,5 +32,16 @@ __pycache__/
 *.pyc
 .venv/
 
+# Dart / Flutter（跨平台客户端）
+.dart_tool/
+.packages
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+Clients/**/build/
+# 宠物存档与模型属于本地运行期数据，不入库
+Clients/**/pet_save.json*
+Clients/**/models/
+
 # 本地更新前的备份目录（Hermes/手工更新时生成）
 *.bak-*/

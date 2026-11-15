@@ -19,6 +19,12 @@ import { randomUUID } from 'node:crypto'
 import { createBridgeServer, normalizeBridgeConfig, PLUGIN_VERSION } from './src/server.js'
 import { createSettingsStore } from './src/settings.js'
 import { registerSettingsApi } from './src/settings-api.js'
+import { AgentCommandService, isSessionMissing } from './src/agent-service.js'
+import { ClientHub } from './src/client-hub.js'
+import { extractText, lastAssistantText, toSpeechText } from './src/reply-text.js'
+
+// 兼容旧引用：这三个工具函数以前定义在本文件里，现在搬到 src/reply-text.js。
+export { extractText, lastAssistantText, toSpeechText }
 
 export const name = 'whalepet-bridge'
 
@@ -59,59 +65,6 @@ async function writeJson(file, value) {
   await fsp.rename(tmp, file)
 }
 
-/** 从文本内容块里取下发给模型的那部分文字。 */
-export function extractText(content) {
-  if (typeof content === 'string') return content.trim()
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text)
-    .join('')
-    .trim()
-}
-
-/** 从 wait() 的 assistant 记录（新→旧）里取最新一条有文字的回复。 */
-export function lastAssistantText(records) {
-  if (!Array.isArray(records)) return ''
-  for (const record of records) {
-    const event = record?.event
-    if (!event || event.type !== 'assistant/message') continue
-    const text = extractText(event.data?.message?.content)
-    if (text) return text
-  }
-  return ''
-}
-
-/**
- * 把 Agent 的 Markdown 回复整理成适合 TTS 念的口语文本。
- * 只做「念出来不难受」所必需的处理，不改写内容。
- */
-export function toSpeechText(markdown) {
-  if (typeof markdown !== 'string' || !markdown.trim()) return ''
-  let text = markdown
-  // 围栏代码块：整段丢掉（念代码没有意义），只保留可选的标题行。
-  text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, '')
-  // 行内代码保留内容，去掉反引号。
-  text = text.replace(/`([^`]+)`/g, '$1')
-  // Markdown 链接/图片：[文字](url) -> 文字。
-  text = text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-  // 标题、引用、列表符号。
-  text = text.replace(/^\s{0,3}#{1,6}\s+/gm, '')
-  text = text.replace(/^\s{0,3}>\s?/gm, '')
-  text = text.replace(/^\s{0,3}[-*+]\s+/gm, '')
-  text = text.replace(/^\s{0,3}\d+[.)]\s+/gm, '')
-  // 粗体/斜体/删除线标记。
-  text = text.replace(/(\*\*|__)(.*?)\1/g, '$2')
-  text = text.replace(/(\*|_)(.*?)\1/g, '$2')
-  text = text.replace(/~~(.*?)~~/g, '$1')
-  // 表格竖线与多余空白。
-  text = text.replace(/\|/g, ' ')
-  text = text.replace(/[ \t]+/g, ' ')
-  text = text.replace(/\n{2,}/g, '\n')
-  text = text.trim()
-  return text
-}
-
 /** 生成/读取 iPad 访问令牌（0600 文件，避免把密钥写进 profile 配置或 git）。 */
 async function resolveToken(config, dataDir, logger) {
   if (typeof config.token === 'string' && config.token.trim()) return config.token.trim()
@@ -131,20 +84,8 @@ async function resolveToken(config, dataDir, logger) {
   return token
 }
 
-/** 小延迟（等待用户授权时轮询用）。 */
-function delay(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    timer.unref?.()
-  })
-}
-
 /** 判断错误是否为「会话不存在」（会话被 GUI 删掉后重建用）。 */
-function isNotFound(error) {
-  const code = error?.code ?? error?.details?.code ?? ''
-  const message = String(error?.message ?? '')
-  return String(code).includes('not-found') || /not[- ]?found|不存在/i.test(message)
-}
+const isNotFound = isSessionMissing
 
 export function apply(ctx, config = {}) {
   // 注意：cordis 的 logger 是「可调用服务代理」，info/warn/error 内部要靠
@@ -208,7 +149,6 @@ export function apply(ctx, config = {}) {
   const sessions = ctx.sessionController
   const permissionPresets = typeof ctx.get === 'function' ? ctx.get('permissionPresets') : undefined
 
-  const askQueues = new Map()
   const prepared = new Set()
   let sessionReady = false
   /** 当前正在使用的宠物会话 id（rotateAfterHours > 0 时按时间桶滚动）。 */
@@ -298,11 +238,29 @@ export function apply(ctx, config = {}) {
     return trimmed.length > 24 ? `${trimmed.slice(0, 24)}…` : trimmed
   }
 
+  /**
+   * 多客户端注册表：新文本通道（/api/agent）的单播、广播、断线补发都走它。
+   * 旧 iPad 音频通道仍用 delivery.subscriber（单连接），两条通道互不影响。
+   */
+  const clientHub = new ClientHub()
+
   const announceTask = (state, text) => {
     try {
       bridge?.announce?.({ type: 'task', state, text })
     } catch {
       // 播报失败不影响任务
+    }
+    // 新客户端：全局通知只发给握手里订阅了 announcements 的客户端（§8.7）。
+    try {
+      clientHub.broadcast({
+        type: 'announcement',
+        scope: 'global',
+        state,
+        display_text: text,
+        speech_text: text,
+      })
+    } catch {
+      // 忽略
     }
   }
 
@@ -316,6 +274,17 @@ export function apply(ctx, config = {}) {
       bridge?.announce?.({ type: 'response', text })
     } catch {
       // 播报失败不影响任务
+    }
+    try {
+      clientHub.broadcast({
+        type: 'announcement',
+        scope: 'global',
+        state: 'finished',
+        display_text: text,
+        speech_text: text,
+      })
+    } catch {
+      // 忽略
     }
   }
 
@@ -558,59 +527,50 @@ export function apply(ctx, config = {}) {
   }
 
   /**
-   * 等宠物 Agent 这一轮结束：允许多次 wait，最长 maxWaitMs。
-   * 超时但不是彻底失败时，把已经产生的回复带回（比空白强）。
+   * 新旧两条通道共用的 Agent 执行服务（docs/CROSS_PLATFORM.md §9.1）：
+   * 旧 iPad 音频通道与新 /api/agent 文本通道都走这里，
+   * 谁都不再单独实现「建会话 → prompt → wait → 取回复」。
    *
-   * 期间通过 notify 给 iPad 发任务进度事件：
-   *   started  —— 任务已提交、开始执行
-   *   approval —— 需要用户在 DSH 里授权/回答；继续等，批准后自动接着跑
+   * 会话生命周期（轮换、权限、人格、归档）仍由本文件负责，
+   * 通过 resolveConversation 回调交给服务调用。
    */
-  const waitForReply = async (dshSessionId, afterSeq, signal, notify) => {
-    const startedAt = Date.now()
-    let best = ''
-    let confirmNotified = false
-    for (;;) {
-      const slice = Math.max(5000, Math.min(requestTimeoutMs, maxWaitMs - (Date.now() - startedAt)))
-      const waited = await sessions.wait({
+  const agentService = new AgentCommandService({
+    sessions,
+    logger,
+    requestTimeoutMs,
+    maxWaitMs,
+    clientTimeZone: 'Asia/Shanghai',
+    // 宠物只有一个长期会话：所有设备共用同一个队列，避免两条 prompt 塞进同一 turn。
+    queueKey: () => 'pet-main',
+    resolveConversation: async () => {
+      const dshSessionId = await ensureSession()
+      return {
         sessionId: dshSessionId,
-        afterSeq,
-        timeoutMs: slice,
-      }, signal)
-      const text = toSpeechText(lastAssistantText(waited?.output?.records))
-      if (text) best = text
-      if (waited?.reason === 'idle') {
-        if (best) return best
-        throw new Error('DSH 没有返回文字回复')
+        prepare: async () => {
+          await applySessionSetup(dshSessionId)
+          // 说话前取消归档：归档态不能跑模型步。
+          await setArchived(dshSessionId, false)
+        },
+        setArchived: async (archived) => {
+          // 空闲归档只是「列表干净」，可以关掉。
+          if (archived && !archiveWhenIdle) return
+          await setArchived(dshSessionId, archived)
+        },
+        markMissing: () => {
+          // 会话在 GUI 里被删了：复位本地状态，用同一个 id 重建。
+          sessionReady = false
+          prepared.delete(dshSessionId)
+          const dispose = personaDisposers.get(dshSessionId)
+          personaDisposers.delete(dshSessionId)
+          try {
+            dispose?.()
+          } catch {
+            // 忽略
+          }
+        },
       }
-      if (waited?.reason === 'input-required') {
-        // 需要授权/回答：通知一次，然后继续等——用户在 GUI 里点完，任务会自动往下跑。
-        if (!confirmNotified) {
-          confirmNotified = true
-          const pending = Array.isArray(waited?.state?.pendingInput) ? waited.state.pendingInput : []
-          const needsApproval = pending.includes('approval') || pending.length === 0
-          notify?.({
-            state: 'approval',
-            text: needsApproval
-              ? '有个操作需要你授权，去 DSH 里点一下同意，我再接着做'
-              : '有个问题需要你回答，去 DSH 里回一下，我再接着做',
-          })
-        }
-        if (Date.now() - startedAt >= maxWaitMs) {
-          if (best) return best
-          throw new Error('等你确认后我才能继续（去 DSH 会话列表里点一下）')
-        }
-        await delay(1500)
-        signal?.throwIfAborted?.()
-        continue
-      }
-      // timeout：还在跑就继续等，直到 maxWaitMs。
-      if (Date.now() - startedAt >= maxWaitMs) {
-        if (best) return best
-        throw new Error('DSH 响应超时')
-      }
-      signal?.throwIfAborted?.()
-    }
-  }
+    },
+  })
 
   const adapter = {
     async health() {
@@ -660,60 +620,15 @@ export function apply(ctx, config = {}) {
       }
     },
 
-    ask(petSessionId, text, { signal, notify } = {}) {
-      const abortSignal = signal ?? new AbortController().signal
-
-      const askOnce = async (dshSessionId) => {
-        await applySessionSetup(dshSessionId)
-        let cursor = 0
-        try {
-          cursor = (await sessions.state({ sessionId: dshSessionId }, abortSignal))?.cursor ?? 0
-        } catch {
-          // 冷会话读不到被动状态时按 0 处理：wait 会返回当前可见的 assistant 记录。
-          cursor = 0
-        }
-        await sessions.prompt({
-          requestId: `whalepet-${randomUUID()}`,
-          sessionId: dshSessionId,
-          mode: 'queue',
-          content: [{ type: 'text', text }],
-          clientTimeZone: 'Asia/Shanghai',
-        }, abortSignal)
-        notify?.({ state: 'started', text: '开始执行，我这就去办' })
-        return waitForReply(dshSessionId, cursor, abortSignal, notify)
-      }
-
-      const run = async () => {
-        let dshSessionId = await ensureSession()
-        await setArchived(dshSessionId, false)
-        try {
-          return await askOnce(dshSessionId)
-        } catch (error) {
-          if (!isNotFound(error)) throw error
-          // 会话在 GUI 里被删了：重建同一个 id，并重试一次。
-          logger.warn(`whalepet: 宠物会话 ${dshSessionId} 已不存在，重新创建`)
-          sessionReady = false
-          prepared.delete(dshSessionId)
-          const dispose = personaDisposers.get(dshSessionId)
-          personaDisposers.delete(dshSessionId)
-          try {
-            dispose?.()
-          } catch {
-            // 忽略
-          }
-          dshSessionId = await ensureSession()
-          await setArchived(dshSessionId, false)
-          return askOnce(dshSessionId)
-        } finally {
-          if (archiveWhenIdle) await setArchived(dshSessionId, true)
-        }
-      }
-
-      // 宠物只有一个会话，所有客户端/请求都串行，避免把两条 prompt 塞进同一 turn。
-      const previous = askQueues.get('main') ?? Promise.resolve()
-      const current = previous.then(run, run)
-      askQueues.set('main', current.catch(() => {}))
-      return current
+    ask(_petSessionId, text, { signal, notify } = {}) {
+      // 旧 iPad 通道没有客户端 request_id：内部生成一个，行为与从前一致。
+      return agentService.execute({
+        requestId: `legacy-${randomUUID()}`,
+        conversationId: mainSessionId,
+        text,
+        signal,
+        notify,
+      }).then((result) => result.speechText)
     },
 
     async close() {
@@ -749,6 +664,8 @@ export function apply(ctx, config = {}) {
         config: bridgeConfig,
         logger,
         getSettings: () => settingsStore.current(),
+        // 新文本通道（/api/agent）：与旧音频通道共用同一个 Agent 执行服务。
+        agent: { service: agentService, hub: clientHub },
       })
       const address = await bridge.listen()
       const rotation = rotateAfterHours > 0 ? `每 ${rotateAfterHours}h 自动换新会话` : '固定单会话'
@@ -801,6 +718,12 @@ export function apply(ctx, config = {}) {
       }
       personaDisposers.clear()
       prepared.clear()
+      // 插件真正卸载时才中断正在跑的任务。
+      try {
+        agentService.dispose()
+      } catch (error) {
+        logger.warn(`whalepet: 停止 Agent 服务出错: ${error?.message ?? error}`)
+      }
     }
   }, 'whalepet.bridge')
 }

@@ -74,11 +74,13 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 
 宠物会话默认落在 `~/.dsh/whalepet/workspace`，会以普通会话出现在 DSH 会话列表里，可以点进去翻看。
 
-## 协议（与 Python 桥接一致）
+## 协议
 
 所有请求带 `Authorization: Bearer <token>`。
 
-- `GET /api/health` → `{"ok":true,"asr":bool,"model":"sensevoice-local/ready"}`
+### 旧音频通道（iPad，兼容 Python 桥接）
+
+- `GET /api/health` → `{"ok":true,"asr":bool,"model":"sensevoice-local/ready","agent":{"ready":true},"protocols":["audio-v1","agent-v2"]}`
 - `POST /api/chat` `{"session_id":"pet-001","text":"..."}` → `{"ok":true,"reply":"..."}`
 - `WS /api/audio`：首条 `{"type":"hello","session_id":"pet-001",...}`；控制消息 `manual_start` /
   `cancel` / `playback_start` / `playback_end`；其余二进制帧 = 16kHz / 单声道 / 小端 Int16 PCM。
@@ -86,6 +88,48 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
   `thinking` / `response` / `error`，以及任务进度：
   `task{state:"started"|"approval"|"interrupted"|"finished"|"failed", text}`。
   `approval` 表示 Agent 需要你在 DSH 里授权/回答；插件会**继续等待**，你点完同意后任务自动接着跑。
+
+### 新文本通道 `WS /api/agent`（Android / macOS / Windows）
+
+面向跨平台客户端：本地做唤醒、识别、播报，只把**识别后的文本**发过来。
+设计依据见 `docs/CROSS_PLATFORM.md` §8。
+
+- 握手：`{"type":"hello","protocol":2,"client_id":"android-7f2c91a0","conversation_id":"whalepet-main","subscriptions":{"announcements":true},"last_received_event_id":null}`
+  → 回 `{"type":"ready","protocol":2,"agent_ready":true,"server_time":"..."}`，随后补发
+  `voice_config`（唤醒词等，带 `revision`）。
+- 命令：`{"type":"command","request_id":"req-01JC...","client_id":"...","text":"帮我查一下明天的安排","source":"voice"}`
+- 取消：`{"type":"cancel","request_id":"...","client_id":"..."}`
+- 服务端事件：
+  - `task{state}`：`queued` / `started` / `approval` / `interrupted` / `finished` / `failed`（**私有**，只到发起设备）
+  - `response`：`{"display_text":"完整回答（保留 Markdown）","speech_text":"适合播报","final":true}`
+  - `announcement`：其它 DSH 会话的全局通知，**只发给订阅了 `announcements` 的客户端**
+  - `error`：`{"code":"...","message":"...","retryable":bool}`
+
+规则：
+
+- `client_id`（设备）/ `conversation_id`（宠物会话）/ `request_id`（一次命令）/ `event_id`（事件）四者不混用；
+- 同一个 `request_id` 重试**只产生一次** DSH prompt（prompt 的 requestId 由它稳定派生）；
+- 断线不终止正在跑的 Agent；结果按客户端缓存（`response` / `approval` 等可靠事件，上限 100 条、TTL 24h），
+  重连 `hello` 时按 `last_received_event_id` 补发；
+- 取消只承诺「停止等待并忽略后续展示」，**不**宣称远程 Agent 已被终止；
+- 新通道不依赖服务端 ASR：识别模型没就绪时 `/api/agent` 照常可用（`health.agent.ready` 恒为 true）。
+
+两条通道**共用同一个 Agent 执行服务**（`src/agent-service.js`）：会话、排队、prompt、回复提取只有一份实现。
+
+### 联调工具（不用 iPad 也能验）
+
+```bash
+# 正常跑一条命令：ready → voice_config → task queued/started → response → task finished
+node Tools/agent/client.js --text "帮我查一下明天的安排"
+
+# 模拟拔线：断线期间的结果在重连后补发
+node Tools/agent/client.js --text "慢任务" --drop-after 300
+
+# 验证幂等：同一个 request_id 重复提交只执行一次
+node Tools/agent/client.js --text "再问一次" --request-id req-001
+```
+
+默认连 `http://127.0.0.1:8787`，令牌从 `~/.dsh/whalepet/ipad-token` 读（可用 `--url` / `--token` 覆盖）。
 
 ## 不用管理会话
 
@@ -179,9 +223,14 @@ cd Plugin/whalepet-dsh-bridge
 node --test test/*.test.js
 ```
 
+共 80 个用例（`node --test`）：
+
 - `textnorm` / `session` / `vad` / `wav`：纯逻辑单测
-- `bridge.test.js`：真 HTTP + 真 WebSocket 的传输层端到端（mock adapter）
+- `bridge.test.js`：真 HTTP + 真 WebSocket 的传输层端到端（mock adapter，旧音频通道回归）
 - `index.test.js`：假 ctx 提供 DSH 服务的插件级集成测试（会话映射 / 审批策略 / 回复抽取 / 重建）
+- `agent-service.test.js`：`AgentCommandService` 单测（排队 / 幂等 requestId / 授权等待 / 取消语义）
+- `client-hub.test.js`：多客户端注册、单播、订阅广播、断线补发缓存、命令幂等
+- `agent-channel.test.js`：`/api/agent` 端到端（鉴权 / 握手 / 命令 / 单播 / 广播 / 幂等 / 断线补发 / 取消）
 
 ## 已知限制
 

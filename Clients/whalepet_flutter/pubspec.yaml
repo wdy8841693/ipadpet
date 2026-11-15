@@ -1,0 +1,14 @@
+name: whalepet_flutter
+description: >-
+  WhalePet 跨平台客户端核心（阶段 B）：宠物状态、数值衰减、行为调度与本地存档。
+  本包是**纯 Dart**，不依赖 Flutter SDK，便于三端共享与单元测试。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+# 阶段 B 只交付纯 Dart 核心，因此不引入 flutter 依赖；
+# 后续阶段 C~E（UI / 原生适配 / 语音引擎）再在本工程内追加 Flutter 壳。
+dev_dependencies:
+  test: ^1.25.0

@@ -308,9 +308,10 @@ export class WebSocketConnection extends EventEmitter {
  * 在 node:http server 上挂一个 WS 端点。
  * @param {import('node:http').Server} server
  * @param {object} options
- * @param {string} options.path 只接受该路径的 upgrade
+ * @param {string} [options.path] 只接受该路径的 upgrade
+ * @param {string[]} [options.paths] 接受多个路径（同一端口挂多条协议时用）
  * @param {(req: import('node:http').IncomingMessage) => {ok: boolean, status?: number, message?: string}} [options.authorize]
- * @param {(conn: WebSocketConnection, req: import('node:http').IncomingMessage) => void} options.onConnection
+ * @param {(conn: WebSocketConnection, req: import('node:http').IncomingMessage, path: string) => void} options.onConnection
  * @param {number} [options.maxMessageBytes]
  * @param {number} [options.pingIntervalMs]
  */
@@ -332,7 +333,10 @@ export function attachWebSocketServer(server, options) {
     }
 
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-    if (url.pathname !== options.path) {
+    const paths = Array.isArray(options.paths) && options.paths.length > 0
+      ? options.paths
+      : (options.path ? [options.path] : [])
+    if (!paths.includes(url.pathname)) {
       abort(404, 'not found')
       return
     }
@@ -360,7 +364,7 @@ export function attachWebSocketServer(server, options) {
       maxMessageBytes: options.maxMessageBytes,
       pingIntervalMs: options.pingIntervalMs,
     })
-    options.onConnection(conn, req)
+    options.onConnection(conn, req, url.pathname)
   }
 
   server.on('upgrade', handleUpgrade)
