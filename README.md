@@ -131,6 +131,16 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ whalepet-bridge 插件（0.0.0.0:8787
 > 旧的 `Server/` Python 桥接仍保留：它自带 faster-whisper + 独立 DSH runtime，适合"隔离宠物"的部署形态；
 > 接工作 DSH 时用插件版。
 
+## v1.2.1 修复：重复连接
+
+`VoiceController.start()` 会在「启动、回前台、设置保存成功、麦克风按钮」多个路径被调用，旧实现每次都新建
+`DSHClient` 而不清理上一条，导致同时存在两条 WebSocket（日志里会看到两次 `ws-upgrade`）、`.ready` 重复触发
+`startCapture()`，最坏情况下两套 `AVAudioEngine` 同时送音频。
+
+修复：`start()` 先 `teardownConnection()`（摘 `onEvent` + 断开 + 停采集）并用 `connectionGeneration`
+让旧的权限回调失效；`startCapture()` 幂等；`appDidBecomeActive()` 只在语音确实关闭时才重连。
+真机日志里应只看到一条 `ws-upgrade`。
+
 ## 语音对话部署速览
 
 1. 服务器（内网 Linux/macOS，Python 3.10+）：

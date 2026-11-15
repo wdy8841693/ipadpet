@@ -50,6 +50,11 @@ final class VoiceController: NSObject {
     private var client: DSHClient?
     private let synthesizer = AVSpeechSynthesizer()
     private var engine: AVAudioEngine?
+    /// start()/stop() 每次递增；旧的权限回调、重连前的晚到事件都靠它失效。
+    /// 修复：启动 / 回前台 / 设置保存成功 / 麦克风按钮都会调 start()，
+    /// 没有这个代际判断时会同时建出多条 WebSocket（表现是 ready/wake 事件重复、
+    /// 甚至两套 AVAudioEngine 同时送音频）。
+    private var connectionGeneration = 0
 
     /// 44.1k/48k → 16k 转换器；iOS 15 上 AVAudioConverter 一步到位。
     private var converter: AVAudioConverter?
@@ -66,7 +71,8 @@ final class VoiceController: NSObject {
 
     // MARK: - 生命周期
 
-    /// 开启语音（配置校验 → 麦克风权限 → 连接）。
+    /// 开启语音（配置校验 → 拆旧连接 → 麦克风权限 → 连接）。
+    /// 幂等：重复调用只会保留最后一次连接，不会叠加 WebSocket / 音频引擎。
     func start() {
         guard settings.isConfigured else {
             state = .error("请先在设置里填写服务器地址和访问令牌")
@@ -75,10 +81,13 @@ final class VoiceController: NSObject {
         guard let base = settings.serverURL else {
             state = .error("服务器地址无效"); return
         }
+        teardownConnection()
+        connectionGeneration += 1
+        let generation = connectionGeneration
         requestMicrophonePermission { [weak self] granted in
             // 授权回调在任意队列；state 变更会驱动 SpriteKit UI，必须回主线程。
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, generation == self.connectionGeneration else { return }
                 guard granted else {
                     self.state = .error("麦克风权限被拒绝，请到系统设置开启")
                     return
@@ -89,10 +98,20 @@ final class VoiceController: NSObject {
     }
 
     func stop() {
-        teardownAudio()
-        client?.disconnectAudio()
-        client = nil
+        connectionGeneration += 1
+        teardownConnection()
         state = .disabled
+    }
+
+    /// 断开旧连接 + 停采集，但不改 state（由调用方决定）。
+    private func teardownConnection() {
+        if let existing = client {
+            // 先摘掉回调，避免旧连接断开时把 error 事件投给新连接的状态机。
+            existing.onEvent = nil
+            existing.disconnectAudio()
+        }
+        client = nil
+        teardownAudio()
     }
 
     /// 手动触发一次指令聆听（点按钮，免唤醒词兜底）。
@@ -115,6 +134,12 @@ final class VoiceController: NSObject {
 
     private func startSession(baseURL: URL) {
         state = .connecting
+        // 防御：万一有残留连接，先断掉再建，保证同一时刻只有一条语音通道。
+        if let existing = client {
+            existing.onEvent = nil
+            existing.disconnectAudio()
+            client = nil
+        }
         let config = DSHClient.Configuration(
             baseURL: baseURL,
             token: settings.token,
@@ -186,6 +211,8 @@ final class VoiceController: NSObject {
     private func startCapture() {
         // 播报中不采集（服务器侧 playback_start 也会暂停）。
         if synthesizer.isSpeaking { state = .speaking; return }
+        // 重连/重复 ready 的情况下，旧采集可能还在：先拆干净，避免两套 tap 同时送音频。
+        if engine != nil { teardownAudio() }
         do {
             try configureAudioSession()
             let engine = AVAudioEngine()

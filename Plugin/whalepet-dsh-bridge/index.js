@@ -501,6 +501,8 @@ export function apply(ctx, config = {}) {
         ...config,
         token,
         language: config.language ?? 'zh',
+        // 排障用访问日志（iPad 每次 health / chat / WS 升级都会记一行）。
+        accessLogPath: config.accessLog === false ? '' : path.join(dataDir, 'access.log'),
       })
       bridge = createBridgeServer({ adapter, config: bridgeConfig, logger })
       const address = await bridge.listen()

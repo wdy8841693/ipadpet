@@ -22,6 +22,7 @@
  */
 
 import { createServer } from 'node:http'
+import { appendFile } from 'node:fs/promises'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { WakeMatcher, DEFAULT_WAKE_ALIASES, isValidSessionId } from './textnorm.js'
 import { pcm16ToWav } from './wav.js'
@@ -378,6 +379,8 @@ export function normalizeBridgeConfig(raw = {}) {
     vad,
     /** 长任务期间给宠物发 thinking 心跳的间隔（0 表示关闭）。 */
     progressIntervalMs: clampInt(raw.progressIntervalMs, 8000, 0, 60000),
+    /** 访问日志：记 iPad 请求到 dataDir/access.log，排障用；空字符串表示关闭。 */
+    accessLogPath: typeof raw.accessLogPath === 'string' ? raw.accessLogPath : '',
   }
 }
 
@@ -399,10 +402,18 @@ function clampNumber(value, fallback, min, max) {
  */
 export function createBridgeServer({ adapter, config, logger }) {
   const log = logger ?? {}
+  const accessLog = config.accessLogPath
+    ? (line) => {
+      const entry = `${new Date().toISOString()} ${line}\n`
+      appendFile(config.accessLogPath, entry, { mode: 0o600 }).catch(() => {})
+    }
+    : () => {}
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
       if (url.pathname === '/api/health') {
+        const authOk = tokenEquals(bearerToken(req), config.token)
+        accessLog(`health ${req.socket.remoteAddress} auth=${authOk ? 'ok' : 'fail'}`)
         if (req.method !== 'GET') {
           sendJson(res, 405, { ok: false, error: '只支持 GET' })
           return
@@ -426,6 +437,8 @@ export function createBridgeServer({ adapter, config, logger }) {
       }
 
       if (url.pathname === '/api/chat') {
+        const authOk = tokenEquals(bearerToken(req), config.token)
+        accessLog(`chat ${req.socket.remoteAddress} auth=${authOk ? 'ok' : 'fail'}`)
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只支持 POST' })
           return
@@ -479,7 +492,9 @@ export function createBridgeServer({ adapter, config, logger }) {
     maxMessageBytes: MAX_WS_MESSAGE,
     pingIntervalMs: 25000,
     authorize(req) {
-      if (!tokenEquals(bearerToken(req), config.token)) {
+      const authOk = tokenEquals(bearerToken(req), config.token)
+      accessLog(`ws-upgrade ${req.socket.remoteAddress} auth=${authOk ? 'ok' : 'fail'}`)
+      if (!authOk) {
         return { ok: false, status: 401, message: '未授权' }
       }
       return { ok: true }

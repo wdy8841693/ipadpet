@@ -88,8 +88,10 @@ final class PetViewController: UIViewController {
     }
 
     func appDidBecomeActive() {
-        if settings.isVoiceEnabled && settings.isConfigured {
-            voice?.start()
+        guard settings.isVoiceEnabled && settings.isConfigured, let voice else { return }
+        // 已经连着就不要再 start()：重复 start 会断开重连，白抖一下状态。
+        if case .disabled = voice.state {
+            voice.start()
         }
     }
 
