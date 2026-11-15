@@ -71,6 +71,10 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     },
     async wait(request) {
       calls.wait.push(request)
+      // 与真实 gateway 一致：timeoutMs 必须是正数（0 会被 bad-request 拒绝）。
+      if (request.timeoutMs !== undefined && request.timeoutMs <= 0) {
+        throw new Error('gateway/bad-request: timeoutMs must be a positive timer delay')
+      }
       const session = live.get(request.sessionId)
       if (!session) {
         // 非宠物会话（跨会话播报）用回复脚本模拟读取最后一条 assistant 回复。

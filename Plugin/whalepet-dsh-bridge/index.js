@@ -296,15 +296,18 @@ export function apply(ctx, config = {}) {
   const readSessionReply = async (sessionId, maxChars = announceReplyChars) => {
     if (maxChars <= 0) return ''
     try {
+      // timeoutMs 必须是正数（0 会被 gateway 以 bad-request 拒绝）。
+      // 会话已经 idle，wait 会立刻返回并带上 newest-first 的 assistant 记录。
       const value = await sessions.wait(
-        { sessionId, timeoutMs: 0, afterSeq: 0 },
+        { sessionId, timeoutMs: 2000, afterSeq: 0 },
         new AbortController().signal,
       )
       const spoken = toSpeechText(lastAssistantText(value?.output?.records ?? []))
       const oneLine = spoken.replace(/\s+/g, ' ').trim()
       if (!oneLine) return ''
       return oneLine.length > maxChars ? `${oneLine.slice(0, maxChars)}…` : oneLine
-    } catch {
+    } catch (error) {
+      safeLog(ctx, 'warn', `whalepet: 读取会话回复失败 session=${sessionId}: ${error?.message ?? error}`)
       return ''
     }
   }

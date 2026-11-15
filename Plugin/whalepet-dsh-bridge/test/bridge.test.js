@@ -78,7 +78,7 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     const ok = await fetch(`${base}/api/health`, { headers: { Authorization: `Bearer ${TOKEN}` } })
     assert.equal(ok.status, 200)
     const body = await ok.json()
-    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.8' })
+    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.9' })
   } finally {
     await bridge.close()
   }
