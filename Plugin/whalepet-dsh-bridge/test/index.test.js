@@ -111,6 +111,7 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
           { sessionId: 'whalepet-session-legacy-1' },
           { sessionId: 'whalepet-session-main' },
           { sessionId: 'session-unrelated' },
+          { sessionId: 'session-smb', title: '解决 SMB 权限问题' },
         ],
       }
     },
@@ -554,12 +555,7 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     client.sendJSON({ type: 'hello', session_id: 'pet-announce' })
     await new Promise((resolve) => setTimeout(resolve, 60))
 
-    // 会话标题（用于播报文案）
-    plugin.handlers.get('session/event')({ id: 'session-smb' }, {
-      type: 'session/title',
-      data: { title: '解决 SMB 权限问题' },
-    })
-
+    // 标题由插件启动时从会话列表预热得到（见 fake list 里的 session-smb）。
     const status = plugin.handlers.get('api-session/status')
     status('session-smb', true)
     const started = await client.waitFor((event) => event.type === 'task' && event.state === 'started')
@@ -575,6 +571,15 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     status('whalepet-session-20261115T00', true)
     await new Promise((resolve) => setTimeout(resolve, 80))
     assert.equal(client.messages.length, before)
+
+    // 新的 title 事件也能更新播报文案
+    plugin.handlers.get('session/event')({ id: 'session-new' }, {
+      type: 'session/title',
+      data: { title: '另一项任务' },
+    })
+    status('session-new', true)
+    const titled = await client.waitFor((event) => event.type === 'task' && event.state === 'started' && /另一项任务/.test(event.text))
+    assert.ok(titled)
 
     // 授权请求也播报（waterfall 必须继续 next()）
     const approval = plugin.handlers.get('approval/request')

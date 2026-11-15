@@ -623,6 +623,18 @@ export function apply(ctx, config = {}) {
         // 忽略
       }
       if (currentSessionId === null) currentSessionId = desiredSessionId()
+      // 预热会话标题：插件重启后，已经存在的会话不会再发 session/title 事件，
+      // 不预热的话跨会话播报会退化成「有个任务开始处理了」。
+      try {
+        const listed = await sessions.list({}, new AbortController().signal)
+        for (const row of listed?.items ?? []) {
+          if (row?.sessionId && typeof row.title === 'string' && row.title.trim()) {
+            sessionTitles.set(row.sessionId, row.title.trim())
+          }
+        }
+      } catch (error) {
+        logger.warn(`whalepet: 预热会话标题失败: ${error?.message ?? error}`)
+      }
       const token = await resolveToken(config, dataDir, logger)
       const bridgeConfig = normalizeBridgeConfig({
         ...config,

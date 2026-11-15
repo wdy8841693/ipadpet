@@ -30,7 +30,7 @@ import { VoiceSession, PHASE, WAKE, voiceConfig } from './session.js'
 import { EnergyVad, FrameSplitter, UtteranceSegmenter } from './vad.js'
 import { attachWebSocketServer } from './ws.js'
 
-const PLUGIN_VERSION = '0.2.3'
+const PLUGIN_VERSION = '0.2.4'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 
