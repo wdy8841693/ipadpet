@@ -764,10 +764,20 @@ export function apply(ctx, config = {}) {
       })
       void archiveLegacySessions()
     }
-    start().catch((error) => {
-      logger.error(`whalepet: 网关启动失败: ${error?.stack ?? error}`)
-    })
+    // 关键：不能在这里 await start()，也不能让 effect 的 setup 阶段等它。
+    // Cordis 的 ctx.effect 会把回调的返回值当作 setup 的 Promise 来 await，而插件重载
+    // （plugin_manager 的 set_plugin / set_bundle → HMR runExclusive → _execute → _reload）
+    // 必须等这个 effect 结算。setup 里一旦卡在 server.listen 上，重载就永远等不到，
+    // 进程内的 profile 锁（package.json.lock）也不会释放，之后所有插件操作全部卡死。
+    // 所以启动放到微任务里异步进行，effect 立即返回，只负责登记 disposer。
+    let cancelled = false
+    void Promise.resolve()
+      .then(() => (cancelled ? undefined : start()))
+      .catch((error) => {
+        logger.error(`whalepet: 网关启动失败: ${error?.stack ?? error}`)
+      })
     return async () => {
+      cancelled = true
       if (settingsApiDisposer) {
         try {
           settingsApiDisposer()

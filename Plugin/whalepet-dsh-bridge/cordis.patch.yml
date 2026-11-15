@@ -17,6 +17,7 @@
         # 会话策略：只用一个长期会话，空闲时归档（列表里看不到），起来自动恢复。
         mainSessionId: whalepet-session-main
         archiveWhenIdle: true
-        # 每 24 小时自动换一条新会话（旧的归档）；设 0 则永久同一个会话。
-        rotateAfterHours: 24
+        # 0 = 永久同一个会话（像 Super Agent 一样只聊一个）；>0 = 每 N 小时换新（旧的归档）。
+        # 单会话要靠上下文自动压缩兜底：profile 里需启用 compaction-basic。
+        rotateAfterHours: 0
         sessionTitle: '🐋 鲸鱼娘（自动维护，不用管）'
