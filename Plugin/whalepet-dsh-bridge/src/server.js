@@ -37,7 +37,7 @@ import { AGENT_PROTOCOL_VERSION } from './agent-protocol.js'
 // 兼容旧引用：VoicePipeline 以前定义在 server.js 里，现在搬到 legacy-audio.js。
 export { VoicePipeline }
 
-export const PLUGIN_VERSION = '0.4.0'
+export const PLUGIN_VERSION = '0.4.1'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 

@@ -39,6 +39,13 @@ function createFakeSessions({ script = [] } = {}) {
           output: { records: [] },
         }
       }
+      if (next.kind === 'question') {
+        return {
+          reason: 'input-required',
+          state: { cursor: pending.cursor, pendingInput: ['question'] },
+          output: { records: [] },
+        }
+      }
       if (next.delayMs) {
         await new Promise((resolve) => setTimeout(resolve, next.delayMs))
       }
@@ -195,4 +202,74 @@ test('execute：调用方取消只中断等待，底层任务继续跑完', asyn
 test('isSessionMissing：识别会话不存在', () => {
   assert.equal(isSessionMissing(notFound()), true)
   assert.equal(isSessionMissing(new Error('boom')), false)
+})
+
+test('execute：需要回答时用 onQuestion 念出题目与选项，然后继续等到结束', async () => {
+  const { sessions } = createFakeSessions({
+    script: [
+      { kind: 'question' },       // 第一次 wait：需要用户选择（只有 question，没有 approval）
+      { text: '好的，按第一个方案来' },
+    ],
+  })
+  let asked = 0
+  let delivered = 0
+  // 让 wait 返回 question 类型的 pendingInput
+  const originalWait = sessions.wait.bind(sessions)
+  sessions.wait = async (request) => {
+    const value = await originalWait(request)
+    if (value.reason === 'input-required') {
+      return { ...value, state: { ...value.state, pendingInput: ['question'] } }
+    }
+    return value
+  }
+  const service = new AgentCommandService({
+    sessions,
+    queueKey: () => 'pet-main',
+    resolveConversation: async () => ({ sessionId: 'pet-session' }),
+    onQuestion: () => {
+      asked += 1
+      return '要把文件保存到哪个目录？选项：第一个 工作区，第二个 桌面；去 DSH 里选一下'
+    },
+    maxWaitMs: 60000,
+  })
+  const events = []
+  const result = await service.execute({
+    requestId: 'req-q1',
+    conversationId: 'c',
+    text: '保存文件',
+    notify: (event) => {
+      events.push(event)
+      if (event.state === 'approval') delivered += 1
+    },
+  })
+  assert.equal(asked, 1)
+  assert.equal(delivered, 1)
+  const approval = events.find((event) => event.state === 'approval')
+  assert.match(approval.text, /要把文件保存到哪个目录/)
+  assert.match(approval.text, /第一个 工作区/)
+  assert.equal(result.displayText, '好的，按第一个方案来')
+})
+
+test('execute：onQuestion 拿不到题目时回落到通用提示', async () => {
+  const { sessions } = createFakeSessions({
+    script: [{ kind: 'input-required' }, { text: '完成' }],
+  })
+  const service = new AgentCommandService({
+    sessions,
+    queueKey: () => 'pet-main',
+    resolveConversation: async () => ({ sessionId: 'pet-session' }),
+    onQuestion: () => '',
+    maxWaitMs: 60000,
+  })
+  const events = []
+  await service.execute({
+    requestId: 'req-q2',
+    conversationId: 'c',
+    text: '做点事',
+    notify: (event) => events.push(event),
+  })
+  const approval = events.find((event) => event.state === 'approval')
+  assert.ok(approval)
+  assert.match(approval.text, /需要你/)
+  assert.doesNotMatch(approval.text, /选项：/)
 })

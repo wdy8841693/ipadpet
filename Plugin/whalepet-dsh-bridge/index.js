@@ -22,6 +22,7 @@ import { registerSettingsApi } from './src/settings-api.js'
 import { AgentCommandService, isSessionMissing } from './src/agent-service.js'
 import { ClientHub } from './src/client-hub.js'
 import { extractText, lastAssistantText, toSpeechText } from './src/reply-text.js'
+import { describeQuestion, firstQuestion } from './src/question-text.js'
 
 // 兼容旧引用：这三个工具函数以前定义在本文件里，现在搬到 src/reply-text.js。
 export { extractText, lastAssistantText, toSpeechText }
@@ -358,9 +359,13 @@ export function apply(ctx, config = {}) {
     const offQuestion = ctx.on('user-questions/request', (request, next) => {
       try {
         const sessionId = request?.agent?.session?.id
+        // 念出题目和选项，不然用户只知道「有个问题」却不知道问什么。
+        const spoken = describeQuestion(firstQuestion(request))
+        // 宠物会话不发跨会话播报，但要记住题目，等 AgentCommandService 的等待轮次取用。
+        if (sessionId) rememberQuestion(sessionId, spoken)
         if (shouldAnnounceSession(sessionId)) {
           const label = sessionLabel(sessionId)
-          announceTask('approval', label ? `有任务需要你回答：${label}` : '有任务需要你回答')
+          announceTask('approval', label ? `${label}：${spoken}` : spoken)
         }
       } catch {
         // 忽略
@@ -534,12 +539,27 @@ export function apply(ctx, config = {}) {
    * 会话生命周期（轮换、权限、人格、归档）仍由本文件负责，
    * 通过 resolveConversation 回调交给服务调用。
    */
+  // 需要用户「选择/回答」时，把题目和选项念出来（用最近一次挂起的 user-questions 请求）。
+  const pendingQuestions = new Map()
+  const rememberQuestion = (sessionId, spoken) => {
+    if (!sessionId || !spoken) return
+    pendingQuestions.set(sessionId, { spoken, at: Date.now() })
+  }
+  const takeQuestion = (sessionId) => {
+    const hit = pendingQuestions.get(sessionId)
+    if (!hit) return ''
+    pendingQuestions.delete(sessionId)
+    // 只用于本次等待：超过 10 分钟视为过期。
+    return Date.now() - hit.at > 10 * 60 * 1000 ? '' : hit.spoken
+  }
+
   const agentService = new AgentCommandService({
     sessions,
     logger,
     requestTimeoutMs,
     maxWaitMs,
     clientTimeZone: 'Asia/Shanghai',
+    onQuestion: ({ sessionId }) => takeQuestion(sessionId),
     // 宠物只有一个长期会话：所有设备共用同一个队列，避免两条 prompt 塞进同一 turn。
     queueKey: () => 'pet-main',
     resolveConversation: async () => {

@@ -54,6 +54,8 @@ export class AgentCommandService {
    * @param {number} [deps.requestTimeoutMs] 单次 wait 的超时
    * @param {number} [deps.maxWaitMs] 单轮回答最长等待
    * @param {string} [deps.clientTimeZone]
+   * @param {(request: {sessionId: string}) => string} [deps.onQuestion]
+   *   需要回答时取「题目 + 选项」的口语文本；拿不到就回落到通用提示。
    * @param {{info?: Function, warn?: Function, error?: Function}} [deps.logger]
    */
   constructor({
@@ -63,6 +65,7 @@ export class AgentCommandService {
     requestTimeoutMs = 300000,
     maxWaitMs = 600000,
     clientTimeZone = 'Asia/Shanghai',
+    onQuestion,
     logger = {},
   }) {
     if (!sessions) throw new TypeError('AgentCommandService 需要 sessions')
@@ -74,6 +77,7 @@ export class AgentCommandService {
     this.requestTimeoutMs = Math.max(1000, Number(requestTimeoutMs) || 300000)
     this.maxWaitMs = Math.max(this.requestTimeoutMs, Number(maxWaitMs) || 600000)
     this.clientTimeZone = clientTimeZone
+    this.onQuestion = typeof onQuestion === 'function' ? onQuestion : undefined
     this.logger = logger
     /** 队列键 -> 上一条任务的尾巴（串行化用）。 */
     this.queues = new Map()
@@ -235,6 +239,19 @@ export class AgentCommandService {
         if (!confirmNotified) {
           confirmNotified = true
           const pending = Array.isArray(waited?.state?.pendingInput) ? waited.state.pendingInput : []
+          // 只有问题、没有授权时，才能确定这是「要你选」；题目内容由 onQuestion 钩子补全。
+          const questionOnly = pending.length > 0
+            && pending.every((kind) => kind === 'question')
+            && typeof this.onQuestion === 'function'
+          if (questionOnly) {
+            const spoken = this.onQuestion({ sessionId })
+            if (spoken) {
+              notify?.({ state: 'approval', text: spoken })
+              await delay(1500)
+              signal?.throwIfAborted?.()
+              continue
+            }
+          }
           const needsApproval = pending.includes('approval') || pending.length === 0
           notify?.({
             state: 'approval',

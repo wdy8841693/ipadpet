@@ -82,7 +82,7 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     assert.equal(body.ok, true)
     assert.equal(body.asr, true)
     assert.equal(body.model, 'mock-sensevoice')
-    assert.equal(body.version, '0.4.0')
+    assert.equal(body.version, '0.4.1')
     assert.deepEqual(body.agent, { ready: true })
     assert.deepEqual(body.protocols, ['audio-v1', 'agent-v2'])
   } finally {

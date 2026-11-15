@@ -169,7 +169,8 @@ node Tools/agent/client.js --text "再问一次" --request-id req-001
   `response`「做完了：<会话标题>。<最后一条回复的摘要>」（完成用 response，App 各版本都会念出来；
   摘要长度由 `announceReplyChars` 控制，默认 80 字，0 = 不带回复）；
 - `approval/request`：任何会话需要授权 → `有任务需要你授权：<标题>`；
-- `user-questions/request`：需要回答 → `有任务需要你回答：<标题>`；
+- `user-questions/request`：需要回答/选择 → `<标题>：<题目>。选项：第一个 …，第二个 …；去 DSH 里选一下`
+  （题目截断 40 字、每个选项 12 字、最多念 3 个，多的提示「还有 N 个选项去 DSH 里看」）；
 - 会话名字优先用标题（`sessionTitle` 服务，插件重启后也能读到已有会话的标题）；
   新会话标题还没生成时，用**首条用户消息**当名字（如「开始处理：帮我修复 SMB 挂载权限」）；
   都没有才退化成「有个任务开始处理了」。过长会截断。
