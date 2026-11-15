@@ -1,5 +1,0 @@
-aiohttp>=3.9,<4
-numpy>=1.24
-webrtcvad-wheels>=2.0.14
-faster-whisper>=1.0
-deepseek-harness-sdk>=0.2.1rc2

@@ -1,6 +1,0 @@
-=== 2026-11-15T10:35:48+08:00 dsh-switch start (pid 2310933), delay=75s
---- 2026-11-15T10:37:03+08:00 stopping old app
---- 2026-11-15T10:37:07+08:00 starting direct-binary wrapper
---- 2026-11-15T10:37:12+08:00 new dsh healthy after 6s (HTTP 401)
---- 2026-11-15T10:37:12+08:00 saved pm2 process list
-=== 2026-11-15T10:37:12+08:00 done

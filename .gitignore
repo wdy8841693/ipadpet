@@ -1,11 +1,6 @@
-# macOS / Xcode
+# macOS / Xcode / Samba
 .DS_Store
-# Samba/macOS AppleDouble 元数据垃圾（gitignore 不支持行内注释，须独占一行）
 ._*
-
-# 本地工作副本（git 历史已有 v1.1.0 tag，无需目录备份）
-.backup-v1.1.0/
-.workbuddy/
 *.xcuserstate
 xcuserdata/
 DerivedData/
@@ -17,18 +12,22 @@ build/
 # XcodeGen 生成的工程（用 project.yml 重新生成，不入库）
 WhalePet.xcodeproj/
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-
-# 桥接服务器本地配置（含真实 token / API key，绝不入库）
-Server/.env
-
-# 素材中间产物（最终 PNG 入库）
-Tools/art/out_raw/
-
 # 编辑器
 .vscode/
 .idea/
 *.swp
+
+# 部署/运行期产物
+Tools/deploy/*.log
+*.log
+
+# 插件本地运行时数据（令牌、访问日志）都在 ~/.dsh/whalepet，不在仓库内
+node_modules/
+
+# 其它 agent 的工作记录（不属于本仓库）
+.workbuddy/
+
+# Python（素材脚本可能产生的缓存）
+__pycache__/
+*.pyc
+.venv/

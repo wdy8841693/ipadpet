@@ -11,9 +11,9 @@ iPad App ──WS(16kHz PCM)──▶ 本插件（Host 内，0.0.0.0:8787）
 iPad 本地 TTS ◀── response 文本 ─────────┘（音频不下发）
 ```
 
-和仓库里 `Server/` 的 Python 桥接相比，这一版的定位完全不同：
+和早期 v1.2.0 的独立 Python 桥接（`Server/`，v2 重构时已移除，git tag `v1.2.0` 可找回）相比，这一版的定位完全不同：
 
-| | Python 桥接（Server/） | 本插件 |
+| | 旧版 Python 桥接（已移除） | 本插件 |
 |---|---|---|
 | 运行形态 | 独立进程 + 独立 `DSH_HOME` | 住在工作 DSH 进程里 |
 | 语音识别 | 自带 faster-whisper | 复用 DSH 的 SenseVoice（`ctx.speechToText`） |

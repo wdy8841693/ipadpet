@@ -1,212 +1,180 @@
-# 鲸鱼娘 DSH 宠物 🐋‍♀️
+# 鲸鱼娘 DSH 宠物 🐋
 
-一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发女仆裙 Q 版少女，鲸尾 + 鳍耳，立绘来自开源项目 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）。为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 整图切换 + 程序化运动动画，30fps 低功耗运行，无内购、无第三方运行时依赖。
+一位住在 iPad 全屏海底世界里的**鲸鱼娘**——蓝发女仆裙 Q 版少女，鲸尾 + 鳍耳，立绘来自开源项目
+[dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）。
 
-**v1.2.0 新增：语音唤醒 + DeepSeek Harness 对话。** 通过内网自部署的桥接服务器（`Server/`），对着 iPad 说 **"小鲸小鲸"** 即可唤醒她，随后语音下达指令，服务器完成唤醒词检测与中文语音识别，交给 DeepSeek Harness（DSH）处理，回答由 iPad 本地 TTS 播报，宠物同步切换"聆听/思考/播报"动画。语音仅在 App 前台工作，音频只走局域网。部署方式见 [Server/README.md](Server/README.md)。
+为 **iPad mini 4（A8 / 2GB RAM / iPadOS 15.8.x）** 量身打造：SpriteKit 整图切换 + 程序化运动动画，
+30fps 低功耗；再通过一个 **DSH Host 插件**把语音接进你本机正在运行的 DeepSeek Harness——
+宠物会话就是完整的 DSH Agent：能查资料、跑命令、改文件，任务开始/完成/需要授权会主动提醒，
+**会话不用你管**。
+
+| 部分 | 版本 | 说明 |
+|---|---|---|
+| iPad App（`WhalePet/`） | **v1.2.2** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
+| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.2.0** | 局域网网关：ASR / 唤醒词 / 会话 / 任务提醒 |
 
 ![预览](docs/preview.png)
 
-> DSH = **D**eep **S**ea **H**ug（深海抱抱）。10 张状态立绘（待机/散步/巡游/摸头/投喂/睡觉/拖拽/玩耍/委屈/挥手）+ 漂浮、摇摆、Q 弹、点头等程序化运动。被摸头会脸红冒爱心，被拎起来会晃荡喊晕船。
+## 项目结构
 
-## 功能
+```
+ipadpet/
+├── WhalePet/                 # iPad App 源码（SwiftUI 之外的纯 UIKit + SpriteKit）
+│   ├── Pet/                  #   状态机、数值、存档、台词
+│   ├── Scenes/  UI/          #   SpriteKit 场景、气泡、HUD
+│   ├── Voice/                #   AVAudioEngine 采集、AVAudioConverter 16k、TTS
+│   ├── Networking/           #   DSHClient（HTTP + WebSocket，iOS 15 兼容）
+│   ├── Support/              #   AppDelegate / ViewController / 服务器设置（Keychain）
+│   └── Resources.xcassets/   #   立绘与图标（来自上游 MIT 素材）
+├── WhalePetTests/            # 纯逻辑 XCTest（状态机/数值/存档/配置校验）
+├── Plugin/
+│   └── whalepet-dsh-bridge/  # DSH Host 插件（局域网网关，零第三方依赖）
+│       ├── index.js          #   插件入口：会话/人格/权限/任务提醒
+│       ├── src/              #   传输层（server/ws）、VAD、唤醒词、WAV
+│       ├── test/             #   node:test：纯逻辑 + 真 HTTP/WS + 假 ctx 集成
+│       ├── cordis.patch.yml  #   bundle 配置（端口/权限预设/会话轮换）
+│       └── README.md         #   插件安装、协议、配置、排障
+├── Tools/
+│   ├── art/                  # 素材导入/生成脚本
+│   ├── scripts/check.py      # Linux 侧静态自检（Swift/资产/权限/插件测试）
+│   └── deploy/               # PM2 部署：dsh-web.sh（直连本地 dsh）、pm2-switch.sh
+├── docs/
+│   ├── ARCHITECTURE.md       # 整体架构、协议、会话策略、排障
+│   ├── DESIGN.md             # 设计取舍与 A8 性能预算
+│   ├── refs/                 # DSH Host API / bundle 打包契约调研
+│   ├── preview.png
+│   ├── ACKNOWLEDGEMENTS.md   # 开源参考致谢
+│   └── THIRD-PARTY-NOTICES.md
+├── project.yml               # XcodeGen 工程唯一事实源（.xcodeproj 不入库）
+├── LICENSE
+└── README.md
+```
 
-| 交互 | 效果 |
+## 架构
+
+```
+iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──▶ 工作 DSH
+                                    ├─ ctx.speechToText   SenseVoice（本地 CPU）
+                                    ├─ 唤醒词 / VAD / 状态机
+                                    └─ ctx.sessionController → 完整 Agent 会话
+```
+
+细节（协议、事件、会话轮换、安全边界）见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
+
+## 能力
+
+| 能力 | 说明 |
 |---|---|
-| 轻点鲸鱼娘 | 摸头：Q 弹挤压 + 举手欢呼 + 爱心 + 心情↑ |
-| 按住拖动 | 拎起来到处放（拖拽态四肢乱晃） |
-| 🐟 投喂 | 小鱼干飞进嘴里，饱食↑ |
-| 🫧 玩耍 | 泡泡球弹跳，心情↑ 精力↓ |
-| 🌙 睡觉 | 入睡恢复精力，再点唤醒 |
-| 🎙️ 说话 | 开启语音 / 手动触发一次指令（免唤醒词） |
-| ⚙️ 设置 | 填写桥接服务器地址与访问令牌，保存即测试连通 |
-| ✏️ 改名 | 自定义名字（≤12 字符），台词随名字变化 |
+| 语音唤醒 | 说「**小鲸小鲸**」唤醒，停顿后说指令；也支持一句话带命令 |
+| 真 Agent | 宠物会话是完整的 DSH Agent：联网检索、读文件、跑命令、多步执行（默认权限 `workspace-write`） |
+| 任务提醒 | 任务**开始**气泡提示；**需要授权**时语音提醒「去 DSH 点同意」，批准后自动继续；**完成/失败**气泡提示 |
+| 不用管会话 | 只有一个长期会话，空闲自动归档（列表不可见），每 24h 自动换新，历史由 DSH 自动压缩 |
+| 本地播报 | 回复经口语化清洗后用 AVSpeechSynthesizer 播放；播报期间自动闭麦防自触发 |
+| 离线宠物 | 不连服务器也能摸头/投喂/玩耍/睡觉，数值与存档都在本地 |
+| 设备适配 | iPadOS 15 部署目标、A8 省电预算、四方向自适应、全屏独占 |
 
-- **语音对话**：前台待唤醒 → 说"小鲸小鲸"（支持一句话带指令）→ DSH 生成回答 → 本地 TTS 播报，播报期间自动闭麦防自触发；也可点 🎙️ 手动开始。
-- **数值系统**：饱食 / 心情 / 精力三条状态槽，随时间缓慢衰减；离线最多结算 6 小时，不会"一觉醒来饿死"。
-- **自主行为**：加权随机状态机（待机/散步/巡游/睡觉），又饿又累时会变蔫、主动求关注。
-- **台词气泡**：按场景与数值状态选句，避免连续重复；语音过程有专属气泡与状态。
-- **持久化**：JSON 原子写入 Application Support，杀进程不丢档；服务器地址存 UserDefaults，令牌存 Keychain。
-- **全方向旋转**：横竖屏自适应，`UIRequiresFullScreen` 全屏独占（老设备省内存）。
+## 快速开始
 
-## 设备与性能预算（iPad mini 4）
+### 1. DSH 侧（一次性）
 
-| 项 | 取值 | 说明 |
-|---|---|---|
-| 最低系统 | iPadOS 15.0 | mini 4 最高 15.8.x，不支持 16 |
-| 帧率 | 30 fps | `preferredFramesPerSecond = 30`，省电防发热 |
-| 渲染 | SpriteKit 整图切换 + SKAction 运动 | 无序列帧、无物理引擎、无 SKEffectNode |
-| 纹理显存 | ≈ 9.7 MB（运行时） | 10 张 420pt 立绘 + 背景 + 特效；磁盘含图标 ≈ 14 MB |
-| 粒子 | 12 个复用 SKShapeNode 气泡 | 不用 SKEmitterNode |
-| 存档 | 每 15s + 退后台时 | 原子写，掉电安全 |
-
-## 构建（需要一台 Mac）
-
-本仓库在 Linux 上开发并通过静态自检；**编译与真机安装必须在 macOS + Xcode 上完成**（Apple 工具链限制）。
+前置：当前 profile 已启用语音输入 bundle（`speech-to-text` 行、`defaultProvider: sensevoice-local`）
+与 Web 会话控制器；插件只 `inject` 这些服务，不重复插入。
 
 ```bash
-# 1. 安装 XcodeGen（一次性）
-brew install xcodegen
+# 在 DSH 里安装插件（绝对路径；安装会写入 profile 的 package.json 与 bundle 列表）
+plugin_manager { action: "install_bundle",
+                 target: "/home/dywu/Samba/workspace/ipadpet/Plugin/whalepet-dsh-bridge" }
+```
 
-# 2. 生成 Xcode 工程（project.yml 是唯一事实源，.xcodeproj 不入库）
+- 令牌：首次启动自动生成在 **`~/.dsh/whalepet/ipad-token`**（0600，重启不变）；
+- 配置（端口、权限预设、会话轮换、人名/唤醒词等）在
+  [Plugin/whalepet-dsh-bridge/cordis.patch.yml](Plugin/whalepet-dsh-bridge/cordis.patch.yml)，
+  也可在 profile 的 patch 里按 id `whalepet-bridge` 覆盖；
+- 运行数据都在 `~/.dsh/whalepet/`：`ipad-token`、`access.log`、`sessions` 元数据、宠物工作目录 `workspace/`。
+
+### 2. iPad 侧（需要一台 Mac）
+
+```bash
+# 1）生成工程（project.yml 是唯一事实源）
+brew install xcodegen
 xcodegen generate
 
-# 3. 打开工程
+# 2）打开并真机运行
 open WhalePet.xcodeproj
 ```
 
-在 Xcode 中：
-1. 选中 WhalePet target → Signing & Capabilities → 勾选 *Automatically manage signing*，选择你的 Team（**免费 Apple ID 即可**，7 天有效期，到期重签）。
-2. 连接 iPad mini 4，顶部设备选择它，⌘R 运行。
-3. 首次在设备上信任开发者：设置 → 通用 → VPN与设备管理。
+Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）→ 连 iPad mini 4 → ⌘R。
+首次运行允许「本地网络」与「麦克风」权限。
 
-命令行构建（可选）：
+在 App 里点 **⚙️ → 语音服务器**，填：
 
-```bash
-xcodebuild -project WhalePet.xcodeproj -scheme WhalePet \
-  -destination 'platform=iOS,name=你的iPad' \
-  -allowProvisioningUpdates build
-```
+- 服务器地址：`http://<运行 DSH 的机器 IP>:8787`（同一 WiFi 填局域网 IP；走 ZeroTier 填 ZeroTier IP）
+- 访问令牌：`~/.dsh/whalepet/ipad-token` 的内容
 
-跑单元测试（任意 iPad 模拟器）：
+点「保存并测试」，提示「连接成功」即可说「小鲸小鲸」。
 
-```bash
-xcodebuild test -project WhalePet.xcodeproj -scheme WhalePet \
-  -destination 'platform=iOS Simulator,name=iPad (10th generation)'
-```
+## 配置（插件）
 
-> 注意：Xcode 15+ 默认不带 iOS 15 模拟器运行时，可在 Settings → Platforms 下载；
-> 或直接真机跑测试。部署目标 15.0 用 Xcode 14/15/16 均可编译。
+见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)，常用项：
 
-## 素材来源与再生成
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `host` / `port` | `0.0.0.0` / `8787` | 监听地址；iPad 连接的端口 |
+| `wakePhrase` / `wakeAliases` | `小鲸小鲸` + 同音别名 | 唤醒词表 |
+| `permissionPreset` | `workspace-write` | 宠物会话权限预设（沙箱 + 审批组合） |
+| `rotateAfterHours` | `24` | 每 N 小时自动换新会话；`0` = 永久同一个 |
+| `archiveWhenIdle` | `true` | 空闲归档（DSH 列表不可见），说话前自动恢复 |
+| `requestTimeoutMs` / `maxWaitMs` | `300000` / `600000` | 单次等待 / 单轮最长等待 |
+| `voicePersona` | 内置鲸鱼娘人格 | 自定义宠物人格（仅作用于宠物会话） |
 
-**角色立绘**来自开源项目 [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT，Copyright (c) 2026 Sutera-Diffusus），已随仓库入库，无需联网即可构建。详见 [THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)。
-
-如需更新到上游新版立绘：
+## 测试与自检
 
 ```bash
-cd /tmp && npm pack dsh-whale-musume --registry=https://registry.npmjs.org
-tar xzf dsh-whale-musume-*.tgz
-python3 Tools/art/import_upstream.py --src /tmp/package/assets/generated
-```
-
-**背景与特效**（深海渐变/爱心/小鱼干）为原创程序化绘制：
-
-```bash
-python3 Tools/art/generate_assets.py
-```
-
-## Linux 侧自检（无需 Mac）
-
-```bash
+# Linux 侧全量静态自检（Swift 括号、工程配置、纹理引用、显存预算、权限声明、插件测试）
 python3 Tools/scripts/check.py
+
+# 插件单元/集成测试（43 个）
+cd Plugin/whalepet-dsh-bridge && node --test test/*.test.js
 ```
 
-校验：Swift 括号配平、工程配置（iOS 15 / 仅 iPad / 全屏）、纹理引用一致性、显存预算、测试覆盖、语音权限声明、桥接服务器语法与纯逻辑测试。
+Swift 编译与真机验证必须在 macOS + Xcode 上做，Linux 侧只能做静态哨兵。
 
-## v2：作为 DSH 插件接入你的工作 DSH（推荐）
+## 部署（PM2，可选）
 
-`Plugin/whalepet-dsh-bridge/` 是一个 **DSH Host 插件**，把 iPad 的语音/文本直接接进**本机正在运行的 DSH**：
-音频走 DSH 自带的 SenseVoice（`ctx.speechToText`），会话走官方 `ctx.sessionController`（create → prompt →
-wait），宠物会话是完整的 Agent（工具、检索、文件、多步执行），并出现在 DSH 会话列表里。
-
-```
-iPad App ──HTTP/WS(16kHz PCM)──▶ whalepet-bridge 插件（0.0.0.0:8787）
-                                   ├─ ctx.speechToText   SenseVoice（本地 CPU）
-                                   ├─ 唤醒词 + 会话状态机
-                                   └─ ctx.sessionController = 完整 Agent
-```
-
-- 协议与 `Server/` 的 Python 桥接**完全一致**，iPad 端不用改代码，只改设置里的地址/令牌。
-- 宠物会话默认 `workspace-write`：能读写 `~/.dsh/whalepet/workspace`、跑命令、联网检索；
-  插件在它自己的 scope 里加一段"鲸鱼娘"人格，回复去掉 Markdown 后交给 iPad 的 TTS。
-- 安装/配置/安全说明见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)；
-  DSH Host API 与 bundle 打包契约调研见 [Plugin/docs/](Plugin/docs/)。
-
-**会话不用管**：宠物只有一个长期会话，空闲自动归档（列表里看不见），每 24 小时自动换新会话，
-说话前自动恢复——没有"新建会话/清理会话"这回事。
-
-> PM2 部署（可选）：`Tools/deploy/dsh-web.sh` 是直连本地安装的 dsh 入口（不再每次 npx 解析 registry），
-> `Tools/deploy/pm2-switch.sh` 是一次性切换脚本（带失败回退）。见脚本头部注释。
-
-> 旧的 `Server/` Python 桥接仍保留：它自带 faster-whisper + 独立 DSH runtime，适合"隔离宠物"的部署形态；
-> 接工作 DSH 时用插件版。
-
-## v1.2.2 新增：任务开始 / 完成 / 需要授权提醒
-
-宠物执行任务时会主动提醒：
-
-- **开始**：气泡「开始执行，我这就去办」；
-- **需要授权**：气泡 + 语音「有个操作需要你授权，去 DSH 里点一下同意」——你在 GUI 里点完，
-  服务器会继续等待并自动把任务跑完，不用重新下指令；
-- **完成 / 失败**：气泡「做完了」/「出错了」。
-
-协议上是新的 `task{state, text}` 事件（旧版 App 会忽略未知事件，不会崩）。对应插件侧的
-`waitForReply` 在 `input-required` 时改为继续轮询等待。
-
-## v1.2.1 修复：重复连接
-
-`VoiceController.start()` 会在「启动、回前台、设置保存成功、麦克风按钮」多个路径被调用，旧实现每次都新建
-`DSHClient` 而不清理上一条，导致同时存在两条 WebSocket（日志里会看到两次 `ws-upgrade`）、`.ready` 重复触发
-`startCapture()`，最坏情况下两套 `AVAudioEngine` 同时送音频。
-
-修复：`start()` 先 `teardownConnection()`（摘 `onEvent` + 断开 + 停采集）并用 `connectionGeneration`
-让旧的权限回调失效；`startCapture()` 幂等；`appDidBecomeActive()` 只在语音确实关闭时才重连。
-真机日志里应只看到一条 `ws-upgrade`。
-
-## 语音对话部署速览
-
-1. 服务器（内网 Linux/macOS，Python 3.10+）：
+`dsh web` 默认只监听 `127.0.0.1:3080`；若用 nginx/ZeroTier 暴露浏览器界面，建议用直连入口托管：
 
 ```bash
-cd Server
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # 填 WHALEPET_TOKEN / DSH_HOME / WHALEPET_WORKSPACE / DEEPSEEK_API_KEY
-python run.py
+# 首次：把 PM2 里的 dsh 从 npx 切到本地安装（带失败回退，日志 Tools/deploy/pm2-switch.log）
+pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-autorestart
 ```
 
-2. iPad：⚙️ 设置 → 填 `http://服务器IP:8787` 和令牌 → 保存并测试 → 说"小鲸小鲸"。
+`Tools/deploy/dsh-web.sh` 会按「npx 缓存 → npm 全局 → npx 兜底」直连已安装的 dsh，避免
+`npx @latest` 在 registry 抽风时静默崩溃、PM2 重启循环。
 
-细节（权限模型、TLS、systemd）见 [Server/README.md](Server/README.md)。
-注意：DSH 处于开发者预览期，默认会话权限为 **read-only**；语音唤醒仅 App 前台有效。
+## 文档
 
-## 目录结构
+- [架构与协议](docs/ARCHITECTURE.md)
+- [设计说明（含 A8 性能预算）](docs/DESIGN.md)
+- [插件 README（安装/协议/配置/排障）](Plugin/whalepet-dsh-bridge/README.md)
+- [DSH Host API 调研](docs/refs/dsh-host-api.md) · [bundle 打包契约](docs/refs/dsh-bundle-packaging.md)
+- [开源参考致谢](docs/ACKNOWLEDGEMENTS.md) · [第三方素材许可](docs/THIRD-PARTY-NOTICES.md)
 
-```
-├── project.yml                  # XcodeGen 工程描述（唯一事实源）
-├── Server/                      # 内网桥接服务器（aiohttp + faster-whisper + DSH SDK）
-│   ├── whalepet_bridge/         # 服务主体（文本/唤醒逻辑可单测）
-│   ├── tests/                   # 27 个纯逻辑单元测试
-│   ├── requirements.txt / .env.example / run.py
-│   └── README.md                # 部署与协议文档
-├── WhalePet/
-│   ├── Pet/                     # 纯逻辑 + 渲染节点
-│   │   ├── PetState.swift       # 状态枚举（含语音三态）+ 数值模型（可单测）
-│   │   ├── PetBrain.swift       # 行为调度状态机（可单测）
-│   │   ├── PetStore.swift       # JSON 持久化（可单测）
-│   │   ├── Dialogue.swift       # 台词库
-│   │   └── PetNode.swift        # 状态立绘切换 + SKAction 运动动画
-│   ├── Scenes/PetScene.swift    # 主场景：交互/移动/特效/帧循环/语音状态
-│   ├── Networking/DSHClient.swift  # HTTP 健康检查/聊天 + WebSocket 音频通道
-│   ├── Voice/VoiceController.swift # 麦克风采集/16k 转码/本地 TTS/状态机
-│   ├── UI/                      # SpeechBubbleNode / HUDNode（纯 SK）
-│   ├── Support/                 # AppDelegate / ViewController / ServerSettings / Info.plist
-│   └── Resources.xcassets       # 程序化生成的全部素材
-├── WhalePetTests/               # 23 个纯逻辑单元测试（宠物状态机 + 服务器设置）
-├── Tools/art/import_upstream.py # 上游立绘导入（dsh-whale-musume, MIT）
-├── Tools/art/generate_assets.py # 背景/特效生成器（原创）
-├── Tools/scripts/check.py       # Linux 静态自检
-└── docs/                        # 预览图 / 设计说明 / 第三方声明
-```
+## 已知限制
 
-## 参考与致谢
+- 语音只在 App 前台工作（iOS 不允许后台常驻麦克风）；后台时任务仍在服务器继续，回来可看会话；
+- 语音识别是**整段非流式**（SenseVoice 限制），按句切分后整句送识别；
+- VAD 是轻量能量检测（无原生依赖），安静室内够用，嘈杂环境可调 `vadFloorDbfs` / `vadMarginDb`；
+- 8787 是明文 HTTP + Bearer，仅用于内网/ZeroTier，**不要暴露公网**。
 
-- **角色立绘**：[dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT）——直接使用了其 10 张状态立绘，声明见 [THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)。
-- **设计思路**（未复制代码/素材）：[VPet-Simulator](https://github.com/LorisYounger/VPet) 的状态+数值架构、[Shijima](https://github.com/pixelomer/Shijima-Qt) 的 Shimeji 行为划分、[N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) 的主动陪伴交互。
+## 版本历史
 
-详见 [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)。
+| 版本 | 内容 |
+|---|---|
+| v1.2.2 | 任务开始/完成/需要授权提醒；`task` 事件 |
+| v1.2.1 | 修复 `VoiceController.start()` 重复建连（双 WebSocket / 双音频引擎） |
+| v1.2.0 | 语音唤醒 + 接入 DSH（当时用独立 Python 桥接 `Server/`） |
+| v1.1.0 | 改用开源成品立绘 |
+| v1.0.0 | 首个可运行版本 |
 
-## License
-
-代码与原创素材：MIT（见 [LICENSE](LICENSE)）。
-第三方立绘：MIT（dsh-whale-musume，见 [docs/LICENSE-dsh-whale-musume.txt](docs/LICENSE-dsh-whale-musume.txt)）。
+> 早期 Python 桥接（`Server/`，自带 faster-whisper + 独立 DSH runtime）已在 v2 重构中移除，
+> 需要时可在 git 历史里找回：`git show v1.2.0:Server/README.md`、`git checkout v1.2.0 -- Server`。

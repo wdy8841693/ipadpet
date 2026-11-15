@@ -5,6 +5,8 @@
 3. PetNode 引用的纹理名与 xcassets imageset 一一对应
 4. 单元测试文件存在且覆盖关键类型
 5. 素材尺寸与内存预算检查（A8 / 2GB RAM）
+6. 语音/本地网络权限声明
+7. DSH 插件（清单结构 + node:test 全量用例）
 
 用法: python3 Tools/scripts/check.py
 退出码非 0 = 有问题。
@@ -170,41 +172,41 @@ def check_voice_permissions():
         ok("未启用 NSAllowsArbitraryLoads")
 
 
-def check_server():
-    print("[7] 桥接服务器（Python 语法 + 纯逻辑测试）")
-    server_dir = ROOT / "Server"
-    if not server_dir.exists():
-        bad("缺少 Server/ 目录")
-        return
-    import py_compile
+def check_plugin():
+    print("[7] DSH 插件（plugin/whalepet-dsh-bridge）")
     import subprocess
-    py_files = _real_files(
-        list((server_dir / "whalepet_bridge").glob("*.py"))
-        + list((server_dir / "scripts").glob("*.py"))
-        + [server_dir / "run.py"])
-    broken = False
-    for f in py_files:
-        try:
-            py_compile.compile(str(f), doraise=True)
-        except py_compile.PyCompileError as e:
-            bad(f"{f.name}: 语法错误 {e}")
-            broken = True
-    if not broken:
-        ok(f"{len(py_files)} 个 Python 文件语法通过")
-    if not (server_dir / ".env.example").exists():
-        bad("缺少 Server/.env.example")
+    plugin = ROOT / "Plugin/whalepet-dsh-bridge"
+    if not plugin.exists():
+        bad("缺少 Plugin/whalepet-dsh-bridge/")
+        return
+    manifest = json.loads((plugin / "package.json").read_text(encoding="utf-8"))
+    if not manifest.get("dsh", {}).get("bundle", {}).get("patch"):
+        bad("package.json 缺少 dsh.bundle.patch（无法作为 bundle 安装）")
     else:
-        ok(".env.example 存在")
-    # 纯逻辑测试不依赖 aiohttp/模型，可直接跑。
+        ok(f"{manifest.get('name')}@{manifest.get('version')} 声明了 dsh.bundle.patch")
+    patch = plugin / "cordis.patch.yml"
+    if not patch.exists():
+        bad("缺少 cordis.patch.yml")
+    elif "whalepet-bridge" not in patch.read_text(encoding="utf-8"):
+        bad("cordis.patch.yml 未插入 whalepet-bridge 行")
+    else:
+        ok("cordis.patch.yml 含 whalepet-bridge 行")
+    index = (plugin / "index.js").read_text(encoding="utf-8")
+    for needle in ["export const name", "export const inject", "export function apply"]:
+        if needle in index:
+            ok(needle)
+        else:
+            bad(f"index.js 缺少 {needle}")
+    # 全量 node:test（纯逻辑 / 传输层端到端 / 假 ctx 插件集成）。
     result = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-        cwd=str(server_dir), capture_output=True, text=True,
+        ["node", "--test", "test/*.test.js"],
+        cwd=str(plugin), capture_output=True, text=True,
     )
     if result.returncode == 0:
-        m = re.search(r"Ran (\d+) tests", result.stdout + result.stderr)
-        ok(f"服务器纯逻辑测试通过（{m.group(1) if m else '?'} 个用例）")
+        m = re.search(r"(?:ℹ pass|# pass) (\d+)", result.stdout)
+        ok(f"插件测试通过（{m.group(1) if m else '?'} 个用例）")
     else:
-        bad(f"服务器测试失败:\n{result.stderr[-500:]}")
+        bad(f"插件测试失败:\n{(result.stdout + result.stderr)[-800:]}")
 
 
 def main():
@@ -214,7 +216,7 @@ def main():
     check_memory_budget()
     check_tests()
     check_voice_permissions()
-    check_server()
+    check_plugin()
     print()
     if FAIL:
         print(f"自检失败：{FAIL} 个问题")
