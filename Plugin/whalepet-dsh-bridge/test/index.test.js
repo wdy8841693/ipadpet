@@ -72,7 +72,27 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     async wait(request) {
       calls.wait.push(request)
       const session = live.get(request.sessionId)
-      if (!session) throw notFound()
+      if (!session) {
+        // 非宠物会话（跨会话播报）用回复脚本模拟读取最后一条 assistant 回复。
+        const reply = sessionReplies[request.sessionId]
+        if (!reply) throw notFound()
+        return {
+          reason: 'idle',
+          state: { cursor: 1, active: false, running: false, queue: null, pendingInput: [] },
+          output: {
+            truncated: false,
+            records: [{
+              type: 'event',
+              event: {
+                type: 'assistant/message',
+                seq: 1,
+                time: Date.now(),
+                data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: reply }] } },
+              },
+            }],
+          },
+        }
+      }
       const scripted = pendingWaits.shift()
       if (scripted?.kind === 'input-required') {
         // 模拟「等用户授权」：本轮不产出回复，pendingInput 里带 approval。
@@ -159,6 +179,7 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
   const disposers = []
   const handlers = new Map()
   const sessionTitles = {}
+  const sessionReplies = {}
   const permissionPresets = {
     set(session, name) {
       calls.permissionPreset.push({ sessionId: session.id, name })
@@ -222,7 +243,7 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     },
   }
 
-  return { ctx, calls, live, disposers, transcriptQueue, handlers, sessionTitles }
+  return { ctx, calls, live, disposers, transcriptQueue, handlers, sessionTitles, sessionReplies }
 }
 
 /** 卸载插件注册的所有 effect（网关 + 公告监听）。 */
@@ -573,11 +594,14 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     assert.match(started.message.text, /开始处理/)
     assert.match(started.message.text, /SMB/)
 
+    plugin.sessionReplies['session-smb'] = '已修复 **SMB** 挂载权限，`/mnt/share` 现在可读写。'
     status('session-smb', false)
-    // 完成用 response 事件播报（App 各版本都会念出来）
+    // 完成用 response 事件播报（App 各版本都会念出来），并带上回复摘要
     const finished = await client.waitFor((event) => event.type === 'response')
     assert.match(finished.message.text, /做完了/)
     assert.match(finished.message.text, /SMB/)
+    assert.match(finished.message.text, /已修复 SMB 挂载权限/)
+    assert.doesNotMatch(finished.message.text, /\*\*|`/)
 
     // 宠物自己的会话（whalepet-session-*）不重复播报
     const before = client.messages.length

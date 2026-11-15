@@ -213,6 +213,9 @@ export function apply(ctx, config = {}) {
   // 除了宠物自己发起的任务，会话列表里任何会话开始/结束/需要授权时也播报一句。
   // 这里只负责把事件推给当前连着的 iPad；iPad 不在前台时自然丢弃。
   const announceOtherSessions = config.announceOtherSessions !== false
+  const announceReplyChars = Number.isFinite(Number(config.announceReplyChars))
+    ? Math.max(0, Math.trunc(Number(config.announceReplyChars)))
+    : 80
   const sessionTitles = new Map()
   /** 会话的首条用户消息（标题还没生成时用它当名字）。 */
   const sessionPrompts = new Map()
@@ -289,6 +292,23 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /** 读某个会话最后一条 assistant 回复，整理成口语摘要（超长截断）。 */
+  const readSessionReply = async (sessionId, maxChars = announceReplyChars) => {
+    if (maxChars <= 0) return ''
+    try {
+      const value = await sessions.wait(
+        { sessionId, timeoutMs: 0, afterSeq: 0 },
+        new AbortController().signal,
+      )
+      const spoken = toSpeechText(lastAssistantText(value?.output?.records ?? []))
+      const oneLine = spoken.replace(/\s+/g, ' ').trim()
+      if (!oneLine) return ''
+      return oneLine.length > maxChars ? `${oneLine.slice(0, maxChars)}…` : oneLine
+    } catch {
+      return ''
+    }
+  }
+
   ctx.effect(() => {
     const offTitle = ctx.on('session/event', (session, event) => {
       try {
@@ -312,8 +332,17 @@ export function apply(ctx, config = {}) {
     const offStatus = ctx.on('api-session/status', (sessionId, running) => {
       if (!shouldAnnounceSession(sessionId)) return
       const label = sessionLabel(sessionId)
-      if (running) announceTask('started', label ? `开始处理：${label}` : '有个任务开始处理了')
-      else announceSpeech(label ? `做完了：${label}` : '有个任务做完了')
+      if (running) {
+        announceTask('started', label ? `开始处理：${label}` : '有个任务开始处理了')
+        return
+      }
+      // 完成：把最后一条回复的摘要也念出来（标题可能刚生成，重新取一次）。
+      void (async () => {
+        const reply = await readSessionReply(sessionId)
+        const name = sessionLabel(sessionId) || label
+        const head = name ? `做完了：${name}` : '有个任务做完了'
+        announceSpeech(reply ? `${head}。${reply}` : head)
+      })()
     })
     const offApproval = ctx.on('approval/request', (request, next) => {
       try {

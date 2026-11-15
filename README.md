@@ -11,7 +11,7 @@
 | 部分 | 版本 | 说明 |
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
-| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.2.6** | 局域网网关：ASR / 唤醒词 / 会话 / 任务提醒 |
+| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.2.7** | 局域网网关：ASR / 唤醒词 / 会话 / 任务提醒 |
 
 ![预览](docs/preview.png)
 
