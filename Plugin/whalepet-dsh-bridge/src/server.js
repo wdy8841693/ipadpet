@@ -30,7 +30,7 @@ import { VoiceSession, PHASE, WAKE, voiceConfig } from './session.js'
 import { EnergyVad, FrameSplitter, UtteranceSegmenter } from './vad.js'
 import { attachWebSocketServer } from './ws.js'
 
-const PLUGIN_VERSION = '0.2.2'
+const PLUGIN_VERSION = '0.2.3'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 
@@ -617,6 +617,20 @@ export function createBridgeServer({ adapter, config, logger }) {
   return {
     server,
     pipelines,
+    /**
+     * 把一条事件推给「当前连着的 iPad」（没有连接则丢弃）。
+     * 供插件把其它 DSH 会话的任务进度转成宠物播报。
+     */
+    announce(payload) {
+      const target = delivery.subscriber
+      if (!target || target.closed) return false
+      try {
+        target.send(payload)
+        return true
+      } catch {
+        return false
+      }
+    },
     /** @returns {Promise<string>} 实际监听地址 */
     listen() {
       return new Promise((resolve, reject) => {

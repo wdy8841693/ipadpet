@@ -156,6 +156,7 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
   }
 
   const disposers = []
+  const handlers = new Map()
   const permissionPresets = {
     set(session, name) {
       calls.permissionPreset.push({ sessionId: session.id, name })
@@ -187,6 +188,10 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     effect(fn) {
       disposers.push(fn())
     },
+    on(event, listener) {
+      handlers.set(event, listener)
+      return () => handlers.delete(event)
+    },
     get(service) {
       if (service === 'permissionPresets') return permissionPresets
       if (service === 'workspaceRegistry') return workspaceRegistry
@@ -206,7 +211,18 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     },
   }
 
-  return { ctx, calls, live, disposers, transcriptQueue }
+  return { ctx, calls, live, disposers, transcriptQueue, handlers }
+}
+
+/** 卸载插件注册的所有 effect（网关 + 公告监听）。 */
+async function disposePlugin(plugin) {
+  for (const dispose of [...plugin.disposers].reverse()) {
+    try {
+      await dispose?.()
+    } catch {
+      // 忽略
+    }
+  }
 }
 
 /** 找一个空闲端口（测试用）。 */
@@ -278,7 +294,7 @@ test('插件启动：监听成功、令牌/会话目录落盘', async () => {
     assert.equal(plugin.health.model, 'sensevoice-local/ready')
     assert.ok(fs.existsSync(path.join(plugin.dataDir, 'workspace')))
   } finally {
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
   }
 })
 
@@ -300,7 +316,7 @@ test('插件启动：未配置 token 时自动生成 0600 令牌文件', async (
     const health = await waitForBridge(`http://127.0.0.1:${port}`, { Authorization: `Bearer ${token}` })
     assert.equal(health.ok, true)
   } finally {
-    await env.disposers[0]?.()
+    await disposePlugin(env)
   }
 })
 
@@ -345,7 +361,7 @@ test('chat：建会话 -> prompt -> wait -> 回复；同一 session 复用', asy
     assert.ok(plugin.calls.archive.length >= 1)
     assert.ok(plugin.calls.unarchive.length >= 1)
   } finally {
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
   }
 })
 
@@ -373,7 +389,7 @@ test('chat：会话在 GUI 被删后自动重建', async () => {
     // 重建仍用同一个宠物会话 id，不产生新会话。
     assert.equal(plugin.calls.create[1].sessionId, firstId)
   } finally {
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
   }
 })
 
@@ -413,7 +429,7 @@ test('WS：完整语音链路走通 speechToText + 官方会话', async () => {
     assert.equal(plugin.calls.prompt.at(-1).content[0].text, '帮我看看天气')
   } finally {
     client.close()
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
   }
 })
 
@@ -432,7 +448,7 @@ test('health：识别失败时 asr=false', async () => {
     assert.equal(health.asr, false)
     assert.match(health.model, /failed/)
   } finally {
-    await env.disposers[0]?.()
+    await disposePlugin(env)
   }
 })
 test('toSpeechText：Markdown 转成能念的口语文本', () => {
@@ -463,7 +479,7 @@ test('启动时归档早期随机 id 的宠物会话，只归档不删', async (
     assert.equal(archived.includes('whalepet-session-main'), false)
     assert.equal(archived.includes('session-unrelated'), false)
   } finally {
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
   }
 })
 
@@ -496,7 +512,7 @@ test('每 24 小时自动换新会话：旧会话归档，同一时间段内复�
     assert.notEqual(second, first)
     assert.ok(plugin.calls.archive.some((entry) => entry.sessionId === first), '旧会话应被归档')
   } finally {
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
   }
 })
 
@@ -524,6 +540,54 @@ test('WS: 需要授权时先发 approval 提醒，批准后继续返回最终回
     assert.deepEqual(tasks, ['started', 'approval', 'finished'])
   } finally {
     client.close()
-    await plugin.disposers[0]?.()
+    await disposePlugin(plugin)
+  }
+})
+
+
+test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的会话不播报', async () => {
+  const plugin = await startPlugin()
+  const client = new TestWebSocketClient()
+  try {
+    await client.connect({ port: plugin.port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await client.waitFor((event) => event.type === 'ready')
+    client.sendJSON({ type: 'hello', session_id: 'pet-announce' })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+
+    // 会话标题（用于播报文案）
+    plugin.handlers.get('session/event')({ id: 'session-smb' }, {
+      type: 'session/title',
+      data: { title: '解决 SMB 权限问题' },
+    })
+
+    const status = plugin.handlers.get('api-session/status')
+    status('session-smb', true)
+    const started = await client.waitFor((event) => event.type === 'task' && event.state === 'started')
+    assert.match(started.message.text, /开始处理/)
+    assert.match(started.message.text, /SMB/)
+
+    status('session-smb', false)
+    const finished = await client.waitFor((event) => event.type === 'task' && event.state === 'finished')
+    assert.match(finished.message.text, /做完了/)
+
+    // 宠物自己的会话（whalepet-session-*）不重复播报
+    const before = client.messages.length
+    status('whalepet-session-20261115T00', true)
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    assert.equal(client.messages.length, before)
+
+    // 授权请求也播报（waterfall 必须继续 next()）
+    const approval = plugin.handlers.get('approval/request')
+    let continued = false
+    await approval({ agent: { session: { id: 'session-smb' } } }, async () => {
+      continued = true
+      return { kind: 'rejected' }
+    })
+    assert.equal(continued, true, 'approval 监听必须把 next() 的 outcome 返回')
+    const approvalEvent = await client.waitFor((event) => event.type === 'task' && event.state === 'approval')
+    assert.match(approvalEvent.message.text, /授权/)
+  } finally {
+    client.close()
+    await disposePlugin(plugin)
   }
 })

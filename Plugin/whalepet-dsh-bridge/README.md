@@ -51,6 +51,7 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 | `maxWaitMs` | `600000` | 单轮回答最长等待；超时把已生成的部分回复带回来 |
 | `voicePersona` | 内置鲸鱼娘人格 | 自定义宠物人格（插在宠物会话自己的 scope 里，不影响其它会话） |
 | `progressIntervalMs` | `8000` | 长任务期间给 iPad 发 `thinking` 心跳的间隔；0 关闭 |
+| `announceOtherSessions` | `true` | 其它 DSH 会话（GUI/其它 agent 的任务）开始/结束/需要授权时也播报一句 |
 | `mainSessionId` | `whalepet-session-main` | 宠物唯一的长期会话 id；所有 iPad 共用、重启复用 |
 | `archiveWhenIdle` | `true` | 空闲时归档会话（DSH 列表里看不到），说话前自动取消归档 |
 | `sessionTitle` | `🐋 鲸鱼娘（自动维护，不用管）` | 会话标题，只写一次 |
@@ -94,6 +95,17 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 - 早期按设备随机建的 `whalepet-session-<uuid>` 旧会话会被**自动归档**（不删除，可手动恢复）；
 - **每 24 小时自动换一条新会话**（`rotateAfterHours`）：旧会话归档，新会话继承同一套人格/权限；
   上下文再长也有 DSH 自动压缩兜底，不需要人工清理。
+
+## 其它会话的任务播报（前台语音通知器）
+
+除了宠物自己发起的任务，插件还会监听本机 DSH 的会话事件：
+
+- `api-session/status`：任何会话开始/结束运行 → `开始处理：<会话标题>` / `做完了：<会话标题>`；
+- `approval/request`：任何会话需要授权 → `有任务需要你授权：<标题>`；
+- `user-questions/request`：需要回答 → `有任务需要你回答：<标题>`；
+- 标题来自 `session/title` 事件，过长会截断；宠物自己的会话（`whalepet-session-*`）与 subagent 会话不播报。
+
+所以你在电脑/手机上开的任务，只要 iPad 上的 App 在前台连着，鲸鱼娘就会随口报一句；`announceOtherSessions: false` 可关掉。
 
 ## 任务进度提醒
 

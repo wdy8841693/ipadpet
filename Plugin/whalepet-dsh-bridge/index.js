@@ -207,8 +207,97 @@ export function apply(ctx, config = {}) {
   const personaDisposers = new Map()
   let bridge = null
 
-  /** 归档/恢复：列表里看不到宠物会话，但说话时它仍然能干活。 */
   const getWorkspaceRegistry = () => (typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined)
+
+  // ---- 其它 DSH 会话的任务播报（宠物当“前台语音通知器”）--------------------
+  // 除了宠物自己发起的任务，会话列表里任何会话开始/结束/需要授权时也播报一句。
+  // 这里只负责把事件推给当前连着的 iPad；iPad 不在前台时自然丢弃。
+  const announceOtherSessions = config.announceOtherSessions !== false
+  const sessionTitles = new Map()
+  const sessionRegistry = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined
+  const PET_SESSION_PREFIX = 'whalepet-session-'
+
+  /** 是否是值得播报的「别的会话」。 */
+  const shouldAnnounceSession = (sessionId) => {
+    if (!announceOtherSessions || typeof sessionId !== 'string' || !sessionId) return false
+    if (sessionId.startsWith(PET_SESSION_PREFIX)) return false
+    try {
+      const session = sessionRegistry?.get?.(sessionId)
+      if (session?.header?.origin === 'subagent') return false
+    } catch {
+      // 拿不到会话元信息就照常播报
+    }
+    return true
+  }
+
+  /** 会话标题（太长截断），拿不到就返回空串。 */
+  const sessionLabel = (sessionId) => {
+    const title = sessionTitles.get(sessionId)
+    if (!title) return ''
+    const trimmed = String(title).replace(/\s+/g, ' ').trim()
+    if (!trimmed) return ''
+    return trimmed.length > 24 ? `${trimmed.slice(0, 24)}…` : trimmed
+  }
+
+  const announceTask = (state, text) => {
+    try {
+      bridge?.announce?.({ type: 'task', state, text })
+    } catch {
+      // 播报失败不影响任务
+    }
+  }
+
+  ctx.effect(() => {
+    const offTitle = ctx.on('session/event', (session, event) => {
+      try {
+        if (event?.type === 'session/title' && typeof event.data?.title === 'string') {
+          sessionTitles.set(session.id, event.data.title)
+        }
+      } catch {
+        // 忽略
+      }
+    })
+    const offStatus = ctx.on('api-session/status', (sessionId, running) => {
+      if (!shouldAnnounceSession(sessionId)) return
+      const label = sessionLabel(sessionId)
+      if (running) announceTask('started', label ? `开始处理：${label}` : '有个任务开始处理了')
+      else announceTask('finished', label ? `做完了：${label}` : '有个任务做完了')
+    })
+    const offApproval = ctx.on('approval/request', (request, next) => {
+      try {
+        const sessionId = request?.agent?.session?.id
+        if (shouldAnnounceSession(sessionId)) {
+          const label = sessionLabel(sessionId)
+          announceTask('approval', label ? `有任务需要你授权：${label}` : '有任务需要你授权')
+        }
+      } catch {
+        // 忽略
+      }
+      return next()
+    })
+    const offQuestion = ctx.on('user-questions/request', (request, next) => {
+      try {
+        const sessionId = request?.agent?.session?.id
+        if (shouldAnnounceSession(sessionId)) {
+          const label = sessionLabel(sessionId)
+          announceTask('approval', label ? `有任务需要你回答：${label}` : '有任务需要你回答')
+        }
+      } catch {
+        // 忽略
+      }
+      return next()
+    })
+    const offRemoved = ctx.on('api-session/removed', (sessionId) => {
+      sessionTitles.delete(sessionId)
+    })
+    return () => {
+      offTitle?.()
+      offStatus?.()
+      offApproval?.()
+      offQuestion?.()
+      offRemoved?.()
+    }
+  }, 'whalepet.announce-other-sessions')
 
   const setArchived = async (dshSessionId, archived) => {
     const registry = getWorkspaceRegistry()

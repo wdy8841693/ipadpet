@@ -9,6 +9,8 @@
         # 想更放开可改 danger-full-access；不想动权限就显式写 ''。
         permissionPreset: workspace-write
         requestTimeoutMs: 300000
+        # 其它 DSH 会话（GUI/其它 agent 开的任务）开始、结束、需要授权时，也让宠物播报一句。
+        announceOtherSessions: true
         maxWaitMs: 600000
         # 会话策略：只用一个长期会话，空闲时归档（列表里看不到），起来自动恢复。
         mainSessionId: whalepet-session-main
