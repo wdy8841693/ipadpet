@@ -72,7 +72,7 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──�
 | 真 Agent | 宠物会话是完整的 DSH Agent：联网检索、读文件、跑命令、多步执行（默认权限 `workspace-write`） |
 | 设置页 | DSH「设置 → 鲸鱼娘」可改人设/唤醒词/播报；保存立即生效（写 `~/.dsh/whalepet/settings.json`）；页面里直接给出 iPad 连接地址与令牌 |
 | 任务提醒 | 前台时宠物用**语音播报**：宠物自己的任务（开始/授权/断线恢复/失败）**以及其它 DSH 会话的任务**（开始/完成/授权）都会报一句；断线期间完成的任务重连后补播 |
-| 不用管会话 | 只有一个长期会话，空闲自动归档（列表不可见），每 24h 自动换新，历史由 DSH 自动压缩 |
+| 不用管会话 | **永久同一个会话**（不换新），空闲自动归档（列表不可见）；上下文由 `compaction-basic` 自动压缩兜底 |
 | 本地播报 | 回复经口语化清洗后用 AVSpeechSynthesizer 播放；播报期间自动闭麦防自触发 |
 | 离线宠物 | 不连服务器也能摸头/投喂/玩耍/睡觉，数值与存档都在本地 |
 | 设备适配 | iPadOS 15 部署目标、A8 省电预算、四方向自适应、全屏独占 |
@@ -127,7 +127,7 @@ Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）�
 | `host` / `port` | `0.0.0.0` / `8787` | 监听地址；iPad 连接的端口 |
 | `wakePhrase` / `wakeAliases` | `小鲸小鲸` + 同音别名 | 唤醒词表 |
 | `permissionPreset` | `workspace-write` | 宠物会话权限预设（沙箱 + 审批组合） |
-| `rotateAfterHours` | `24` | 每 N 小时自动换新会话；`0` = 永久同一个 |
+| `rotateAfterHours` | `0`（本机） | `0` = 永久同一个会话（Super Agent 式）；`>0` = 每 N 小时换新、旧的归档 |
 | `archiveWhenIdle` | `true` | 空闲归档（DSH 列表不可见），说话前自动恢复 |
 | `requestTimeoutMs` / `maxWaitMs` | `300000` / `600000` | 单次等待 / 单轮最长等待 |
 | `voicePersona` | 内置鲸鱼娘人格 | 自定义宠物人格（仅作用于宠物会话） |
