@@ -45,3 +45,7 @@ Clients/**/models/
 
 # 本地更新前的备份目录（Hermes/手工更新时生成）
 *.bak-*/
+
+# 临时探针文件（测试/校验遗留）
+*.probe
+.wbtest
