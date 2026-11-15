@@ -41,6 +41,9 @@ function createFakeEnv({ transcripts = [] } = {}) {
     persona: [],
     personaDisposed: 0,
     permissionPreset: [],
+    rename: [],
+    archive: [],
+    unarchive: [],
   }
   const live = new Map() // dshSessionId -> { cursor, pending, replies: string[] }
   const transcriptQueue = [...transcripts]
@@ -86,6 +89,19 @@ function createFakeEnv({ transcripts = [] } = {}) {
             },
           }],
         },
+      }
+    },
+    async rename(request) {
+      calls.rename.push(request)
+      return { title: request.title, seq: 1 }
+    },
+    async list() {
+      return {
+        items: [
+          { sessionId: 'whalepet-session-legacy-1' },
+          { sessionId: 'whalepet-session-main' },
+          { sessionId: 'session-unrelated' },
+        ],
       }
     },
     async resolveAgent(sessionId) {
@@ -135,6 +151,14 @@ function createFakeEnv({ transcripts = [] } = {}) {
       calls.permissionPreset.push({ sessionId: session.id, name })
     },
   }
+  const workspaceRegistry = {
+    async archiveSession(sessionId, options) {
+      calls.archive.push({ sessionId, options })
+    },
+    async unarchiveSession(sessionId) {
+      calls.unarchive.push({ sessionId })
+    },
+  }
   const ctx = {
     logger: {
       info(message) {
@@ -154,7 +178,9 @@ function createFakeEnv({ transcripts = [] } = {}) {
       disposers.push(fn())
     },
     get(service) {
-      return service === 'permissionPresets' ? permissionPresets : undefined
+      if (service === 'permissionPresets') return permissionPresets
+      if (service === 'workspaceRegistry') return workspaceRegistry
+      return undefined
     },
     speechToText,
     sessionController,
@@ -272,7 +298,7 @@ test('chat：建会话 -> prompt -> wait -> 回复；同一 session 复用', asy
     assert.deepEqual(await first.json(), { ok: true, reply: '收到：你好呀' })
 
     assert.equal(plugin.calls.create.length, 1)
-    assert.ok(plugin.calls.create[0].sessionId.startsWith('whalepet-session-'))
+    assert.equal(plugin.calls.create[0].sessionId, 'whalepet-session-main')
     assert.ok(plugin.calls.create[0].cwd.endsWith('workspace'))
     assert.equal(plugin.calls.prompt[0].content[0].text, '你好呀')
     assert.equal(plugin.calls.prompt[0].mode, 'queue')
@@ -295,9 +321,11 @@ test('chat：建会话 -> prompt -> wait -> 回复；同一 session 复用', asy
     assert.equal(plugin.calls.create.length, 1)
     assert.equal(plugin.calls.wait[1].afterSeq, 2)
 
-    // 会话映射写进了 sessions.json。
-    const persisted = JSON.parse(await fsp.readFile(path.join(plugin.dataDir, 'sessions.json'), 'utf8'))
-    assert.ok(persisted['pet-001'].startsWith('whalepet-session-'))
+    // 标题只设置一次；空闲时归档，说话前取消归档。
+    assert.equal(plugin.calls.rename.length, 1)
+    assert.match(plugin.calls.rename[0].title, /鲸鱼娘/)
+    assert.ok(plugin.calls.archive.length >= 1)
+    assert.ok(plugin.calls.unarchive.length >= 1)
   } finally {
     await plugin.disposers[0]?.()
   }
@@ -315,13 +343,17 @@ test('chat：会话在 GUI 被删后自动重建', async () => {
     assert.equal((await send('第一句')).status, 200)
     const firstId = plugin.calls.create[0].sessionId
 
-    // 模拟用户在 GUI 里删除了这个会话。
+    // 模拟用户在 GUI 里删除了这个会话（同时清掉本地缓存，模拟插件重启后的全新探测）。
     plugin.live.clear()
+    plugin.ctx.sessionController.resolveAgent = async () => {
+      throw notFound()
+    }
 
     const response = await send('删了之后')
     assert.equal(response.status, 200)
     assert.equal(plugin.calls.create.length, 2)
-    assert.notEqual(plugin.calls.create[1].sessionId, firstId)
+    // 重建仍用同一个宠物会话 id，不产生新会话。
+    assert.equal(plugin.calls.create[1].sessionId, firstId)
   } finally {
     await plugin.disposers[0]?.()
   }
@@ -394,4 +426,22 @@ test('toSpeechText：Markdown 转成能念的口语文本', () => {
     '结果\n第一项\n第二项\n结论：可以。',
   )
   assert.equal(toSpeechText('```js\nconst a = 1\n```\n正在思考'), '正在思考')
+})
+
+
+test('启动时归档早期随机 id 的宠物会话，只归档不删', async () => {
+  const plugin = await startPlugin()
+  try {
+    // 等迁移异步跑完
+    const deadline = Date.now() + 2000
+    while (plugin.calls.archive.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const archived = plugin.calls.archive.map((entry) => entry.sessionId)
+    assert.ok(archived.includes('whalepet-session-legacy-1'), JSON.stringify(archived))
+    assert.equal(archived.includes('whalepet-session-main'), false)
+    assert.equal(archived.includes('session-unrelated'), false)
+  } finally {
+    await plugin.disposers[0]?.()
+  }
 })

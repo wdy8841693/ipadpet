@@ -51,6 +51,9 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 | `maxWaitMs` | `600000` | 单轮回答最长等待；超时把已生成的部分回复带回来 |
 | `voicePersona` | 内置鲸鱼娘人格 | 自定义宠物人格（插在宠物会话自己的 scope 里，不影响其它会话） |
 | `progressIntervalMs` | `8000` | 长任务期间给 iPad 发 `thinking` 心跳的间隔；0 关闭 |
+| `mainSessionId` | `whalepet-session-main` | 宠物唯一的长期会话 id；所有 iPad 共用、重启复用 |
+| `archiveWhenIdle` | `true` | 空闲时归档会话（DSH 列表里看不到），说话前自动取消归档 |
+| `sessionTitle` | `🐋 鲸鱼娘（自动维护，不用管）` | 会话标题，只写一次 |
 | `dataDir` | `~/.dsh/whalepet` | 令牌、会话映射、宠物会话工作目录的存放位置 |
 | `preRollMs` / `silenceMs` / `maxUtteranceS` / `listenTimeoutS` | `300 / 700 / 20 / 10` | VAD 切句与聆听超时 |
 | `vadFloorDbfs` / `vadMarginDb` / `vadOnsetFrames` | `-55 / 10 / 2` | 能量 VAD 调参 |
@@ -77,6 +80,16 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
   `cancel` / `playback_start` / `playback_end`；其余二进制帧 = 16kHz / 单声道 / 小端 Int16 PCM。
   服务端事件：`ready` / `state(waiting|listening|thinking|speaking)` / `wake` / `transcript` /
   `thinking` / `response` / `error`。
+
+## 不用管理会话
+
+宠物**只有一个长期会话**（`whalepet-session-main`），像 Super Agent 一样一直在，没有"新建对话"的概念：
+
+- 所有 iPad / 全部客户端共用这一个会话，历史连续；插件重启也不用重新建；
+- 空闲时把会话**归档**：DSH 会话列表里看不到它；下一次说话前自动取消归档，说完再归档；
+- 会话标题自动写成「🐋 鲸鱼娘（自动维护，不用管）」，只写一次；
+- 早期按设备随机建的 `whalepet-session-<uuid>` 旧会话会被**自动归档**（不删除，可手动恢复）；
+- 会话变长由 DSH 的自动压缩处理，不需要人工清理。
 
 ## 像 Super Agent 一样工作
 

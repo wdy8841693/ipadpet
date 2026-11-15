@@ -152,8 +152,17 @@ export function apply(ctx, config = {}) {
     ? path.resolve(config.dataDir.trim())
     : DEFAULT_DATA_DIR
   const sessionDir = path.join(dataDir, 'workspace')
-  const stateFile = path.join(dataDir, 'sessions.json')
   const requestTimeoutMs = Math.max(10000, Number(config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) || DEFAULT_REQUEST_TIMEOUT_MS)
+  // 宠物只用一个长期会话：不需要用户管理、不按设备/每轮新建，像 Super Agent 一样一直在线。
+  const mainSessionId = typeof config.mainSessionId === 'string' && config.mainSessionId.trim()
+    ? config.mainSessionId.trim()
+    : 'whalepet-session-main'
+  const sessionTitle = typeof config.sessionTitle === 'string' && config.sessionTitle.trim()
+    ? config.sessionTitle.trim()
+    : '🐋 鲸鱼娘（自动维护，不用管）'
+  // 空闲时把会话归档（列表里看不到），下一次说话前自动取消归档。
+  const archiveWhenIdle = config.archiveWhenIdle !== false
+  const metaFile = path.join(dataDir, 'session-meta.json')
   const maxWaitMs = Math.max(requestTimeoutMs, Number(config.maxWaitMs ?? DEFAULT_MAX_WAIT_MS) || DEFAULT_MAX_WAIT_MS)
   const approvalPolicy = config.approvalPolicy === 'ask' ? 'ask' : 'never'
   // 默认 workspace-write：宠物像 Super Agent 一样能读能写，但只限它自己的工作目录。
@@ -169,25 +178,91 @@ export function apply(ctx, config = {}) {
   const sessions = ctx.sessionController
   const permissionPresets = typeof ctx.get === 'function' ? ctx.get('permissionPresets') : undefined
 
-  /** iPad 的 session_id -> DSH SessionId，持久化在 sessions.json。 */
-  const sessionMap = new Map()
   const askQueues = new Map()
   const prepared = new Set()
+  let sessionReady = false
   /** dshSessionId -> 该 Agent scope 内人格 section 的 disposer。 */
   const personaDisposers = new Map()
   let bridge = null
 
-  const persistSessions = () => writeJson(stateFile, Object.fromEntries(sessionMap))
+  /** 归档/恢复：列表里看不到宠物会话，但说话时它仍然能干活。 */
+  const getWorkspaceRegistry = () => (typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined)
 
-  /** 取（或创建）iPad session 对应的 DSH 会话 id。 */
-  const ensureSession = async (petSessionId) => {
-    const existing = sessionMap.get(petSessionId)
-    if (existing) return existing
-    const dshSessionId = `whalepet-session-${randomUUID()}`
-    await sessions.create({ sessionId: dshSessionId, cwd: sessionDir })
-    sessionMap.set(petSessionId, dshSessionId)
-    await persistSessions()
-    return dshSessionId
+  const setArchived = async (dshSessionId, archived) => {
+    const registry = getWorkspaceRegistry()
+    if (!registry) return
+    try {
+      if (archived && typeof registry.archiveSession === 'function') {
+        await registry.archiveSession(dshSessionId, { stopActivity: true })
+      } else if (!archived && typeof registry.unarchiveSession === 'function') {
+        await registry.unarchiveSession(dshSessionId)
+      }
+    } catch (error) {
+      // 归档只是「列表干净」，失败不影响对话。
+      logger.warn(`whalepet: ${archived ? '归档' : '取消归档'}宠物会话失败: ${error?.message ?? error}`)
+    }
+  }
+
+  /** 一次性写宠物会话标题，之后不再改动（避免每轮追加 rename 事件）。 */
+  const ensureSessionTitle = async (dshSessionId) => {
+    try {
+      const meta = await readJson(metaFile, {})
+      if (meta?.titleApplied === sessionTitle) return
+      await sessions.rename({ sessionId: dshSessionId, title: sessionTitle })
+      await writeJson(metaFile, { ...meta, titleApplied: sessionTitle })
+    } catch (error) {
+      logger.warn(`whalepet: 设置宠物会话标题失败: ${error?.message ?? error}`)
+    }
+  }
+
+  /**
+   * 一次性迁移：把早期随机 id 的宠物会话归档掉（只归档、不删除），
+   * 让会话列表里只剩一个「鲸鱼娘」。
+   */
+  const archiveLegacySessions = async () => {
+    try {
+      if (typeof sessions.list !== 'function') return
+      const registry = getWorkspaceRegistry()
+      if (!registry || typeof registry.archiveSession !== 'function') return
+      const listed = await sessions.list({}, new AbortController().signal)
+      const legacy = (listed?.items ?? []).filter((row) => (
+        typeof row?.sessionId === 'string'
+        && row.sessionId.startsWith('whalepet-session-')
+        && row.sessionId !== mainSessionId
+        && (row.cwd === undefined || row.cwd === sessionDir)
+      ))
+      for (const row of legacy) {
+        try {
+          await registry.archiveSession(row.sessionId, { stopActivity: true })
+          logger.info(`whalepet: 已归档旧的宠物会话 ${row.sessionId}`)
+        } catch {
+          // 单个失败不影响其它
+        }
+      }
+    } catch (error) {
+      logger.warn(`whalepet: 归档旧宠物会话失败: ${error?.message ?? error}`)
+    }
+  }
+
+  /**
+   * 宠物只有一个长期会话：首次用 resolveAgent 探测，不存在才 create，
+   * 之后永远复用同一个 id（插件重启、iPad 重装都一样）。
+   */
+  const ensureSession = async () => {
+    if (sessionReady) return mainSessionId
+    try {
+      const resolved = await sessions.resolveAgent(mainSessionId)
+      if (resolved?.agent) {
+        sessionReady = true
+        return mainSessionId
+      }
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+    }
+    await sessions.create({ sessionId: mainSessionId, cwd: sessionDir })
+    await ensureSessionTitle(mainSessionId)
+    sessionReady = true
+    return mainSessionId
   }
 
   /**
@@ -306,9 +381,10 @@ export function apply(ctx, config = {}) {
       return transcript?.text ?? ''
     },
 
-    async prepareSession(petSessionId) {
-      const dshSessionId = await ensureSession(petSessionId)
+    async prepareSession() {
+      const dshSessionId = await ensureSession()
       await applySessionSetup(dshSessionId)
+      if (archiveWhenIdle) await setArchived(dshSessionId, true)
       // 顺手把识别模型预热起来，第一次唤醒能快一点。
       try {
         const { selection } = speechToText.snapshot()
@@ -341,14 +417,15 @@ export function apply(ctx, config = {}) {
       }
 
       const run = async () => {
-        const dshSessionId = await ensureSession(petSessionId)
+        let dshSessionId = await ensureSession()
+        await setArchived(dshSessionId, false)
         try {
           return await askOnce(dshSessionId)
         } catch (error) {
           if (!isNotFound(error)) throw error
-          // 会话在 GUI 里被删了：换一个新会话重试一次。
-          logger.warn(`whalepet: 会话 ${dshSessionId} 已不存在，重新创建`)
-          sessionMap.delete(petSessionId)
+          // 会话在 GUI 里被删了：重建同一个 id，并重试一次。
+          logger.warn(`whalepet: 宠物会话 ${dshSessionId} 已不存在，重新创建`)
+          sessionReady = false
           prepared.delete(dshSessionId)
           const dispose = personaDisposers.get(dshSessionId)
           personaDisposers.delete(dshSessionId)
@@ -357,15 +434,18 @@ export function apply(ctx, config = {}) {
           } catch {
             // 忽略
           }
-          const fresh = await ensureSession(petSessionId)
-          return askOnce(fresh)
+          dshSessionId = await ensureSession()
+          await setArchived(dshSessionId, false)
+          return askOnce(dshSessionId)
+        } finally {
+          if (archiveWhenIdle) await setArchived(dshSessionId, true)
         }
       }
 
-      // 同一会话串行，避免两条语音同时把 prompt 塞进同一 turn。
-      const previous = askQueues.get(petSessionId) ?? Promise.resolve()
+      // 宠物只有一个会话，所有客户端/请求都串行，避免把两条 prompt 塞进同一 turn。
+      const previous = askQueues.get('main') ?? Promise.resolve()
       const current = previous.then(run, run)
-      askQueues.set(petSessionId, current.catch(() => {}))
+      askQueues.set('main', current.catch(() => {}))
       return current
     },
 
@@ -378,12 +458,6 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => {
     const start = async () => {
       await fsp.mkdir(sessionDir, { recursive: true })
-      const persisted = await readJson(stateFile, {})
-      for (const [key, value] of Object.entries(persisted)) {
-        if (typeof value === 'string' && value.startsWith('whalepet-session-')) {
-          sessionMap.set(key, value)
-        }
-      }
       const token = await resolveToken(config, dataDir, logger)
       const bridgeConfig = normalizeBridgeConfig({
         ...config,
@@ -392,7 +466,8 @@ export function apply(ctx, config = {}) {
       })
       bridge = createBridgeServer({ adapter, config: bridgeConfig, logger })
       const address = await bridge.listen()
-      logger.info(`whalepet: iPad 网关已监听 http://${address} （会话目录 ${sessionDir}）`)
+      logger.info(`whalepet: iPad 网关已监听 http://${address} （宠物会话 ${mainSessionId}，工作目录 ${sessionDir}）`)
+      void archiveLegacySessions()
     }
     start().catch((error) => {
       logger.error(`whalepet: 网关启动失败: ${error?.stack ?? error}`)

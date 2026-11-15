@@ -10,3 +10,7 @@
         permissionPreset: workspace-write
         requestTimeoutMs: 300000
         maxWaitMs: 600000
+        # 会话策略：只用一个长期会话，空闲时归档（列表里看不到），起来自动恢复。
+        mainSessionId: whalepet-session-main
+        archiveWhenIdle: true
+        sessionTitle: '🐋 鲸鱼娘（自动维护，不用管）'
