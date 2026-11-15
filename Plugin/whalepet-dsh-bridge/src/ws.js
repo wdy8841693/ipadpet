@@ -317,17 +317,18 @@ export class WebSocketConnection extends EventEmitter {
 export function attachWebSocketServer(server, options) {
   const handleUpgrade = (req, socket) => {
     let done = false
+    // 拒绝升级时对端可能直接断开：吞掉 socket 错误，避免未捕获异常。
+    socket.on('error', () => {})
     const abort = (status, message) => {
       if (done) return
       done = true
       const body = message ?? ''
-      socket.write(
-        `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Bad Request'}\r\n`
+      const response = `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Bad Request'}\r\n`
         + 'Connection: close\r\n'
         + 'Content-Type: text/plain; charset=utf-8\r\n'
-        + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
-      )
-      socket.destroy()
+        + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+      // 先把 HTTP 响应完整写进内核缓冲，再销毁；直接 destroy() 会丢数据并触发 ECONNRESET。
+      socket.write(response, () => socket.destroy())
     }
 
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')

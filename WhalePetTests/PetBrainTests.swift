@@ -179,6 +179,25 @@ final class PetBrainTests: XCTestCase {
     }
 }
 
+// MARK: - 断线重连策略
+
+final class DSHClientReconnectTests: XCTestCase {
+    func testBackoffSequence() {
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 1), 1)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 2), 2)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 3), 4)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 4), 8)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 5), 16)
+    }
+
+    func testBackoffIsCappedAndToleratesBadInput() {
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 6), 30)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 100), 30)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: 0), 1)
+        XCTAssertEqual(DSHClient.reconnectDelay(attempt: -3), 1)
+    }
+}
+
 // MARK: - 服务器设置
 
 final class ServerSettingsTests: XCTestCase {

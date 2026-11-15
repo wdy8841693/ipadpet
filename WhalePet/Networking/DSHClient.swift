@@ -31,6 +31,8 @@ final class DSHClient {
         case error(String)
         /// 任务进度提醒：started / approval / finished / failed（服务端 `task` 事件）。
         case task(state: String, text: String?)
+        /// 断线自动重连：第 attempt 次、delay 秒后重试。
+        case reconnecting(attempt: Int, delay: TimeInterval)
     }
 
     struct Configuration {
@@ -58,6 +60,17 @@ final class DSHClient {
     private var receiveLoopActive = false
     private let audioQueue = DispatchQueue(label: "whalepet.audio-send")
     private var queuedAudioBytes = 0
+
+    // 断线自动重连状态。只在主线程读写。
+    private var autoReconnect = false
+    private var reconnectAttempt = 0
+    private var reconnectWorkItem: DispatchWorkItem?
+
+    /// 重连退避：1s、2s、4s、8s、16s、30s（封顶）。
+    static func reconnectDelay(attempt: Int) -> TimeInterval {
+        let n = max(1, attempt)
+        return min(30, pow(2, Double(n - 1)))
+    }
 
     var onEvent: ((VoiceEvent) -> Void)?
 
@@ -91,25 +104,35 @@ final class DSHClient {
 
     /// 健康检查。成功返回 nil，失败返回错误描述。
     func checkHealth(completion: @escaping (String?) -> Void) {
+        healthRequest { [weak self] result in
+            switch result {
+            case .success:
+                completion(nil)
+            case .failure(let error):
+                completion(self?.describe(error) ?? "服务器响应异常")
+            }
+        }
+    }
+
+    /// 健康检查的结构化版本：重连逻辑需要区分鉴权失败（不可重试）与网络故障。
+    private func healthRequest(completion: @escaping (Result<Void, Error>) -> Void) {
         guard let url = url(path: "/api/health") else {
-            completion(ClientError.badURL.localizedDescription); return
+            completion(.failure(ClientError.badURL)); return
         }
         var request = URLRequest(url: url, timeoutInterval: config.requestTimeout)
         request.allHTTPHeaderFields = authHeader
-        runDataTask(request) { [weak self] result in
-            guard let self else { return }
+        runDataTask(request) { result in
             switch result {
             case .success(let body):
-                // 严格解析 {"ok":true,...}；{"ok":false} 也算失败。
                 if let data = body.data(using: .utf8),
                    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                    obj["ok"] as? Bool == true {
-                    completion(nil)
+                    completion(.success(()))
                 } else {
-                    completion("服务器响应异常")
+                    completion(.failure(ClientError.transport("服务器响应异常")))
                 }
             case .failure(let error):
-                completion(self.describe(error))
+                completion(.failure(error))
             }
         }
     }
@@ -184,8 +207,52 @@ final class DSHClient {
 
     var isSocketConnected: Bool { socket != nil }
 
+    /// App 层用：连接 + 断线自动重连（含首次 health 检查）。
+    func startAutoConnect() {
+        autoReconnect = true
+        reconnectAttempt = 0
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        closeSocketOnly()
+        attemptConnection()
+    }
+
+    /// 兼容旧调用：立即建连（不做 health、不自动重连）。
     func connectAudio() {
-        disconnectAudio()
+        autoReconnect = false
+        closeSocketOnly()
+        openSocket()
+    }
+
+    func disconnectAudio() {
+        autoReconnect = false
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        closeSocketOnly()
+    }
+
+    /// health 通过后再建 WebSocket；失败按退避重试，鉴权失败则停止。
+    private func attemptConnection() {
+        guard autoReconnect else { return }
+        healthRequest { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.autoReconnect else { return }
+                switch result {
+                case .success:
+                    self.openSocket()
+                case .failure(let error):
+                    if self.isAuthFailure(error) {
+                        self.autoReconnect = false
+                        self.emit(.error("访问令牌无效，请到设置里更新"))
+                    } else {
+                        self.scheduleReconnect(reason: self.describe(error))
+                    }
+                }
+            }
+        }
+    }
+
+    private func openSocket() {
         guard let url = webSocketURL() else {
             emit(.error(ClientError.badURL.localizedDescription)); return
         }
@@ -200,12 +267,40 @@ final class DSHClient {
         startPing()
     }
 
-    func disconnectAudio() {
+    private func closeSocketOnly() {
         receiveLoopActive = false
         pingTimer?.invalidate(); pingTimer = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         audioQueue.sync { queuedAudioBytes = 0 }
+    }
+
+    private func scheduleReconnect(reason: String) {
+        guard autoReconnect, reconnectWorkItem == nil else { return }
+        reconnectAttempt += 1
+        let delay = Self.reconnectDelay(attempt: reconnectAttempt)
+        emit(.reconnecting(attempt: reconnectAttempt, delay: delay))
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reconnectWorkItem = nil
+            self.attemptConnection()
+        }
+        reconnectWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        NSLog("WhalePet: 语音通道断线（%@），%ds 后第 %d 次重连", reason, Int(delay), reconnectAttempt)
+    }
+
+    private func handleSocketFailure(_ message: String) {
+        guard autoReconnect else { return }
+        closeSocketOnly()
+        scheduleReconnect(reason: message)
+    }
+
+    private func isAuthFailure(_ error: Error) -> Bool {
+        if case ClientError.http(let code, _) = error {
+            return code == 401 || code == 403
+        }
+        return false
     }
 
     private func sendHello() {
@@ -254,7 +349,8 @@ final class DSHClient {
         pingTimer?.invalidate()
         let timer = Timer(timeInterval: config.pingInterval, repeats: true) { [weak self] _ in
             self?.socket?.sendPing { error in
-                if error != nil { self?.emit(.error("语音通道已断开")) }
+                guard let self, error != nil else { return }
+                DispatchQueue.main.async { self.handleSocketFailure("ping 超时") }
             }
         }
         pingTimer = timer
@@ -270,7 +366,9 @@ final class DSHClient {
                 self.handleMessage(message)
                 self.receiveLoop()
             case .failure(let error):
-                self.emit(.error("语音通道断开：\(error.localizedDescription)"))
+                DispatchQueue.main.async {
+                    self.handleSocketFailure(error.localizedDescription)
+                }
             }
         }
     }
@@ -282,7 +380,9 @@ final class DSHClient {
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let type = obj["type"] as? String else { return }
             switch type {
-            case "ready": emit(.ready)
+            case "ready":
+                reconnectAttempt = 0
+                emit(.ready)
             case "state": emit(.state(obj["value"] as? String ?? ""))
             case "wake": emit(.wake)
             case "transcript": emit(.transcript(obj["text"] as? String ?? ""))

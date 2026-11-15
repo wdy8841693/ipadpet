@@ -61,8 +61,12 @@ export class TestWebSocketClient extends EventEmitter {
       let handshakeDone = false
       let raw = Buffer.alloc(0)
       socket.on('error', (error) => {
-        if (!handshakeDone) reject(error)
-        else this.emit('error', error)
+        if (!handshakeDone) {
+          reject(error)
+          return
+        }
+        // 握手失败的连接会被服务端主动关闭；此时不再把 ECONNRESET 当成测试错误。
+        if (this.handshakeStatus === 101) this.emit('error', error)
       })
       socket.on('close', () => {
         this.closed = true
@@ -77,6 +81,7 @@ export class TestWebSocketClient extends EventEmitter {
           raw = raw.subarray(index + 4)
           handshakeDone = true
           const status = Number(head.split(' ')[1])
+          this.handshakeStatus = status
           const accept = /sec-websocket-accept:\s*(\S+)/i.exec(head)?.[1]
           const expected = createHash('sha1').update(`${key}${GUID}`).digest('base64')
           resolve({ status, accept, expected, headers: head })

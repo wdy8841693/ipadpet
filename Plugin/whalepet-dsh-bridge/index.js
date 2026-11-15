@@ -229,9 +229,10 @@ export function apply(ctx, config = {}) {
   const ensureSessionTitle = async (dshSessionId) => {
     try {
       const meta = await readJson(metaFile, {})
-      if (meta?.titleApplied === sessionTitle) return
+      // 标题按会话记录：24h 轮换后新会话也要重新命名。
+      if (meta?.titleAppliedSessionId === dshSessionId) return
       await sessions.rename({ sessionId: dshSessionId, title: sessionTitle })
-      await writeJson(metaFile, { ...meta, titleApplied: sessionTitle })
+      await writeJson(metaFile, { ...meta, titleAppliedSessionId: dshSessionId })
     } catch (error) {
       logger.warn(`whalepet: 设置宠物会话标题失败: ${error?.message ?? error}`)
     }
@@ -271,9 +272,12 @@ export function apply(ctx, config = {}) {
    * 宠物只有一个长期会话：首次用 resolveAgent 探测，不存在才 create，
    * 之后永远复用同一个 id（插件重启、iPad 重装都一样）。
    */
-  const ensureSession = async () => {
+  const ensureSession = async ({ rotate = true } = {}) => {
     const desired = desiredSessionId()
     if (desired !== currentSessionId) {
+      // 握手阶段只做「准备」，不切会话：否则轮换边界上重连会把正在执行的任务归档/停掉。
+      // 真正的轮换留到串行化的 ask() 里，保证没有任务在跑。
+      if (!rotate && currentSessionId) return currentSessionId
       // 进入新的时间桶（或首次启动）：老会话归档，换新会话。
       const previous = currentSessionId
       if (previous) await setArchived(previous, true)
@@ -442,9 +446,11 @@ export function apply(ctx, config = {}) {
     },
 
     async prepareSession() {
-      const dshSessionId = await ensureSession()
+      // 握手/重连只做准备：建会话、权限、人格、预热 ASR。
+      // 不归档、不轮换——避免把其它客户端正在执行的任务 stopActivity 掉。
+      const dshSessionId = await ensureSession({ rotate: false })
+      if (!dshSessionId) return
       await applySessionSetup(dshSessionId)
-      if (archiveWhenIdle) await setArchived(dshSessionId, true)
       // 顺手把识别模型预热起来，第一次唤醒能快一点。
       try {
         const { selection } = speechToText.snapshot()

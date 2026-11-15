@@ -8,6 +8,7 @@ final class VoiceController: NSObject {
     enum VoiceState: Equatable {
         case disabled       // 未配置或已关闭
         case connecting     // 连接服务器中
+        case reconnecting(Int) // 断线自动重连，参数为第几次尝试
         case waiting        // 前台待唤醒
         case listening      // 已唤醒，聆听指令
         case thinking       // DSH 处理中
@@ -18,6 +19,7 @@ final class VoiceController: NSObject {
             switch self {
             case .disabled: return "语音已关闭"
             case .connecting: return "正在连接服务器…"
+            case .reconnecting(let attempt): return "正在重连（第 \(attempt) 次）…"
             case .waiting: return "待唤醒（说\"小鲸小鲸\"）"
             case .listening: return "在听，请说指令…"
             case .thinking: return "思考中…"
@@ -43,6 +45,8 @@ final class VoiceController: NSObject {
     var onError: ((String) -> Void)?
     /// 任务进度气泡（开始 / 需要授权 / 完成 / 失败）。
     var onTaskNotice: ((String) -> Void)?
+    /// 首次断线自动重连时给用户一个提示（后续重试不反复打扰）。
+    var onReconnectNotice: ((String) -> Void)?
 
     private(set) var state: VoiceState = .disabled {
         didSet { onStateChange?(state) }
@@ -151,23 +155,21 @@ final class VoiceController: NSObject {
         let client = DSHClient(config: config)
         client.onEvent = { [weak self] event in self?.handle(event) }
         self.client = client
-        client.checkHealth { [weak self] problem in
-            // health 回调在 URLSession 队列；回主线程再改 state / 建连接。
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let problem {
-                    self.state = .error(problem)
-                    return
-                }
-                client.connectAudio()
-            }
-        }
+        // DSHClient 内部会先做 health 检查，失败按指数退避自动重连。
+        client.startAutoConnect()
     }
 
     private func handle(_ event: DSHClient.VoiceEvent) {
         switch event {
         case .ready:
             startCapture()
+        case .reconnecting(let attempt, _):
+            // 播报中不要用「正在重连」盖掉 speaking 动画。
+            if case .speaking = state { break }
+            state = .reconnecting(attempt)
+            if attempt == 1 {
+                onReconnectNotice?("和服务器断开了，我在自动重连…")
+            }
         case .wake:
             state = .listening
         case .state(let value):
@@ -374,8 +376,13 @@ extension VoiceController: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                            didFinish utterance: AVSpeechUtterance) {
         client?.sendControl("playback_end")
-        resumeCapture()
-        state = .waiting
+        if engine == nil {
+            // 播报期间发生重连时采集尚未恢复（startCapture 在 speaking 时直接返回），这里补启动。
+            startCapture()
+        } else {
+            resumeCapture()
+            state = .waiting
+        }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,

@@ -60,6 +60,9 @@ final class PetViewController: UIViewController {
         controller.onTaskNotice = { [weak self] text in
             self?.scene?.showVoiceNotice(text)
         }
+        controller.onReconnectNotice = { [weak self] text in
+            self?.scene?.showVoiceNotice(text)
+        }
         controller.onError = { [weak self] message in
             self?.scene?.showVoiceError(message)
         }

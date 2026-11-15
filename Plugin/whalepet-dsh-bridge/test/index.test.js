@@ -393,6 +393,9 @@ test('WS：完整语音链路走通 speechToText + 官方会话', async () => {
     }
     assert.equal(plugin.calls.create.length, 1)
     assert.ok(plugin.calls.prepare.includes('sensevoice-local'))
+    // 回归：握手/重连只做准备，不能归档当前会话（stopActivity 会中断正在跑的任务）。
+    const currentSessionId = plugin.calls.create[0].sessionId
+    assert.ok(!plugin.calls.archive.some((entry) => entry.sessionId === currentSessionId))
 
     client.sendBinary(utterance())
     const wake = await client.waitFor((event) => event.type === 'wake')

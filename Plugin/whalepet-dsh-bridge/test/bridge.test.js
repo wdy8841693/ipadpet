@@ -78,7 +78,7 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     const ok = await fetch(`${base}/api/health`, { headers: { Authorization: `Bearer ${TOKEN}` } })
     assert.equal(ok.status, 200)
     const body = await ok.json()
-    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.0' })
+    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.1' })
   } finally {
     await bridge.close()
   }
@@ -122,7 +122,8 @@ test('WS: 未授权升级被拒绝', async () => {
     const client = new TestWebSocketClient()
     const handshake = await client.connect({ port })
     assert.equal(handshake.status, 401)
-    client.close()
+    // 握手失败不是 WebSocket 连接，直接断 TCP，不发 close 帧。
+    client.socket?.destroy()
   } finally {
     await bridge.close()
   }
