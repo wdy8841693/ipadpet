@@ -179,13 +179,17 @@ final class VoiceController: NSObject {
                 // 播报结束/超时回等待；不打断 speaking 状态。
                 if case .speaking = state { break }
                 state = .waiting
-            case "thinking", "speaking": state = .thinking
+            case "thinking", "speaking":
+                // 任务提醒/心跳播报期间不要把「回答中」打回「思考中」。
+                if case .speaking = state { break }
+                state = .thinking
             default: break
             }
         case .transcript(let text):
             onTranscript?(text)
             state = .thinking
         case .thinking:
+            if case .speaking = state { break }
             state = .thinking
         case .task(let taskState, let text):
             handleTaskNotice(state: taskState, text: text)
@@ -198,27 +202,34 @@ final class VoiceController: NSObject {
         }
     }
 
-    /// 任务进度提醒：开始 / 需要授权 / 完成 / 失败。
-    /// - started: 气泡提示（不打断播报）
-    /// - approval: 气泡 + 语音播报，确保用户注意到要去授权
-    /// - finished / failed: 只上气泡，结论由后面的 response / error 负责
+    /// 任务进度提醒（App 在前台时：气泡 + 语音播报）。
+    /// - started:     气泡 + 播报「开始执行…」，让用户确认任务真的开跑了
+    /// - approval:    气泡 + 播报，确保用户注意到要去 DSH 授权
+    /// - interrupted: 气泡 + 播报「任务还在后台继续」（断线重连后）
+    /// - failed:      气泡 + 播报「出错了」
+    /// - finished:    只上气泡——紧跟着的 response 会直接把结果念出来，不重复播报
     private func handleTaskNotice(state taskState: String, text: String?) {
         switch taskState {
         case "started":
+            let message = text ?? "开始执行，我这就去办"
             self.state = .thinking
-            onTaskNotice?(text ?? "开始处理…")
+            onTaskNotice?(message)
+            speak(message)
         case "approval":
             let message = text ?? "有个操作需要你在 DSH 里确认一下"
             onTaskNotice?(message)
             speak(message)
         case "interrupted":
-            // 断线重连时任务还在后台跑：只上气泡，避免和进行中的播报/采集抢状态。
+            let message = text ?? "连接恢复了，任务还在后台继续"
             self.state = .thinking
-            onTaskNotice?(text ?? "连接恢复了，任务还在后台继续")
+            onTaskNotice?(message)
+            speak(message)
         case "finished":
+            // 结果由 response 播报；这里只上气泡，避免把刚要念的结果打断。
             onTaskNotice?("做完了")
         case "failed":
             onTaskNotice?("出错了")
+            speak("这个任务出错了")
         default:
             break
         }
