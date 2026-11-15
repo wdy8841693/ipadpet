@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="WhalePet LAN bridge">
+  <defs>
+    <linearGradient id="sea" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c4a6e"/>
+      <stop offset="1" stop-color="#082f49"/>
+    </linearGradient>
+    <linearGradient id="whale" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#sea)"/>
+  <!-- 水面波纹 -->
+  <path d="M8 46c4-3 8-3 12 0s8 3 12 0 8-3 12 0 8 3 12 0" fill="none" stroke="#0ea5e9" stroke-width="2.4" stroke-linecap="round" opacity="0.55"/>
+  <path d="M10 53c3.5-2.4 7-2.4 10.5 0s7 2.4 10.5 0 7-2.4 10.5 0 7 2.4 10.5 0" fill="none" stroke="#0284c7" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <!-- 鲸鱼身体 -->
+  <path d="M14 34c0-7 6.2-12 14.5-12 7.4 0 12.2 3.5 14.2 8.1l6.6-3.6c.9-.5 1.9.2 1.9 1.2v6.2c0 1-.9 1.7-1.8 1.3l-6.2-2.6C41 39.4 34.9 42 27.5 42 19.5 42 14 39.5 14 34Z" fill="url(#whale)"/>
+  <!-- 喷水 -->
+  <path d="M24 20c.6-3 .2-5.4-1-7.2M27.4 19.6c.2-2.6-.4-4.6-1.6-6" fill="none" stroke="#bae6fd" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- 眼睛 -->
+  <circle cx="23" cy="32" r="1.9" fill="#0c4a6e"/>
+  <!-- 局域网信号弧 -->
+  <path d="M46 14.5a9 9 0 0 0 0 12.8M50.6 11a15.4 15.4 0 0 0 0 19.6" fill="none" stroke="#fbbf24" stroke-width="2.2" stroke-linecap="round" opacity="0.9"/>
+</svg>

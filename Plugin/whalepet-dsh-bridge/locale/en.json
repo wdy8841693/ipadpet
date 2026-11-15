@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "WhalePet LAN bridge",
+    "description": "Gateway for the WhalePet iPad app: receives 16 kHz audio over the LAN, transcribes it with the local SenseVoice model, matches the wake phrase, and asks the official DSH session service."
+  }
+}

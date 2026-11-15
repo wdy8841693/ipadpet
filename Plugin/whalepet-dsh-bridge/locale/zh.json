@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "鲸鱼娘局域网网关",
+    "description": "给 iPad 上的 WhalePet 提供局域网接入：接收 16kHz 语音，用本机 SenseVoice 模型转写、匹配唤醒词，再交给官方 DSH 会话服务生成回复。"
+  }
+}

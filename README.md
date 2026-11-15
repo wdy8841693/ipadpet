@@ -103,6 +103,28 @@ python3 Tools/scripts/check.py
 
 校验：Swift 括号配平、工程配置（iOS 15 / 仅 iPad / 全屏）、纹理引用一致性、显存预算、测试覆盖、语音权限声明、桥接服务器语法与纯逻辑测试。
 
+## v2：作为 DSH 插件接入你的工作 DSH（推荐）
+
+`Plugin/whalepet-dsh-bridge/` 是一个 **DSH Host 插件**，把 iPad 的语音/文本直接接进**本机正在运行的 DSH**：
+音频走 DSH 自带的 SenseVoice（`ctx.speechToText`），会话走官方 `ctx.sessionController`（create → prompt →
+wait），宠物会话是完整的 Agent（工具、检索、文件、多步执行），并出现在 DSH 会话列表里。
+
+```
+iPad App ──HTTP/WS(16kHz PCM)──▶ whalepet-bridge 插件（0.0.0.0:8787）
+                                   ├─ ctx.speechToText   SenseVoice（本地 CPU）
+                                   ├─ 唤醒词 + 会话状态机
+                                   └─ ctx.sessionController = 完整 Agent
+```
+
+- 协议与 `Server/` 的 Python 桥接**完全一致**，iPad 端不用改代码，只改设置里的地址/令牌。
+- 宠物会话默认 `workspace-write`：能读写 `~/.dsh/whalepet/workspace`、跑命令、联网检索；
+  插件在它自己的 scope 里加一段"鲸鱼娘"人格，回复去掉 Markdown 后交给 iPad 的 TTS。
+- 安装/配置/安全说明见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)；
+  DSH Host API 与 bundle 打包契约调研见 [Plugin/docs/](Plugin/docs/)。
+
+> 旧的 `Server/` Python 桥接仍保留：它自带 faster-whisper + 独立 DSH runtime，适合"隔离宠物"的部署形态；
+> 接工作 DSH 时用插件版。
+
 ## 语音对话部署速览
 
 1. 服务器（内网 Linux/macOS，Python 3.10+）：

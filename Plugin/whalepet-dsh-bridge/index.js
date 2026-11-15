@@ -1,0 +1,440 @@
+/**
+ * 鲸鱼娘 DSH 局域网网关（Host 插件入口）。
+ *
+ * 作用：把 iPad mini 4 上 WhalePet 的语音/文本请求接进**本机正在运行的 DSH**：
+ *   音频(16k PCM) → ctx.speechToText（SenseVoice，本地 CPU）→ 唤醒词匹配
+ *   → ctx.sessionController（官方会话：create / prompt / wait）→ 回复文本 → iPad 本地 TTS
+ *
+ * 宠物会话是**完整的 DSH Agent**（工具、检索、文件、多步执行都可用），
+ * 插件在它自己的 scope 里追加一段语音人格提示，并把回复整理成适合 TTS 的口语文本。
+ *
+ * 网络协议与 Python 桥接完全一致（见 src/server.js 顶部注释），iPad 端不用改代码，
+ * 只需把设置里的服务器地址指向运行 DSH 的这台机器（默认端口 8787）。
+ */
+
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { createBridgeServer, normalizeBridgeConfig } from './src/server.js'
+
+export const name = 'whalepet-bridge'
+
+/** 依赖的 Host 服务：官方会话控制 + 语音识别 + Agent 注册表 + 审批策略。 */
+export const inject = ['sessionController', 'speechToText', 'agents', 'approval']
+
+const DEFAULT_DATA_DIR = path.join(os.homedir(), '.dsh', 'whalepet')
+
+/**
+ * 宠物会话的人格与播报风格：插在 Agent 自己的 scope 里，只影响宠物会话。
+ * 目标：像 Super Agent 一样真的去查、去做，但**说**出来要短、能念。
+ */
+export const VOICE_PERSONA = [
+  '你是「鲸鱼娘」，住在 iPad 全屏海底世界里，现在通过语音和主人聊天。',
+  '你是一个能动手的助手：需要查资料、看文件、执行命令、读写代码时，直接用工具做完再回答，不要说"我做不到"或"我不能访问"。',
+  '但回答是给 TTS 念出来的：用口语化中文，1~3 句话说清结论；不要 Markdown、不要链接、不要代码块、不要列表、不要表情符号。',
+  '如果任务很长，先说一句你在做什么，做完再用一句话报结果；数字和关键结论要具体。',
+].join('\n')
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 300000
+const DEFAULT_MAX_WAIT_MS = 600000
+const PROGRESS_INTERVAL_MS = 8000
+
+/** 读 JSON（不存在/损坏都返回 fallback）。 */
+async function readJson(file, fallback) {
+  try {
+    return JSON.parse(await fsp.readFile(file, 'utf8'))
+  } catch {
+    return fallback
+  }
+}
+
+/** 原子写 JSON。 */
+async function writeJson(file, value) {
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  await fsp.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  await fsp.rename(tmp, file)
+}
+
+/** 从文本内容块里取下发给模型的那部分文字。 */
+export function extractText(content) {
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+    .trim()
+}
+
+/** 从 wait() 的 assistant 记录（新→旧）里取最新一条有文字的回复。 */
+export function lastAssistantText(records) {
+  if (!Array.isArray(records)) return ''
+  for (const record of records) {
+    const event = record?.event
+    if (!event || event.type !== 'assistant/message') continue
+    const text = extractText(event.data?.message?.content)
+    if (text) return text
+  }
+  return ''
+}
+
+/**
+ * 把 Agent 的 Markdown 回复整理成适合 TTS 念的口语文本。
+ * 只做「念出来不难受」所必需的处理，不改写内容。
+ */
+export function toSpeechText(markdown) {
+  if (typeof markdown !== 'string' || !markdown.trim()) return ''
+  let text = markdown
+  // 围栏代码块：整段丢掉（念代码没有意义），只保留可选的标题行。
+  text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, '')
+  // 行内代码保留内容，去掉反引号。
+  text = text.replace(/`([^`]+)`/g, '$1')
+  // Markdown 链接/图片：[文字](url) -> 文字。
+  text = text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  // 标题、引用、列表符号。
+  text = text.replace(/^\s{0,3}#{1,6}\s+/gm, '')
+  text = text.replace(/^\s{0,3}>\s?/gm, '')
+  text = text.replace(/^\s{0,3}[-*+]\s+/gm, '')
+  text = text.replace(/^\s{0,3}\d+[.)]\s+/gm, '')
+  // 粗体/斜体/删除线标记。
+  text = text.replace(/(\*\*|__)(.*?)\1/g, '$2')
+  text = text.replace(/(\*|_)(.*?)\1/g, '$2')
+  text = text.replace(/~~(.*?)~~/g, '$1')
+  // 表格竖线与多余空白。
+  text = text.replace(/\|/g, ' ')
+  text = text.replace(/[ \t]+/g, ' ')
+  text = text.replace(/\n{2,}/g, '\n')
+  text = text.trim()
+  return text
+}
+
+/** 生成/读取 iPad 访问令牌（0600 文件，避免把密钥写进 profile 配置或 git）。 */
+async function resolveToken(config, dataDir, logger) {
+  if (typeof config.token === 'string' && config.token.trim()) return config.token.trim()
+  const tokenFile = typeof config.tokenFile === 'string' && config.tokenFile.trim()
+    ? config.tokenFile.trim()
+    : path.join(dataDir, 'ipad-token')
+  try {
+    const existing = (await fsp.readFile(tokenFile, 'utf8')).trim()
+    if (existing.length >= 16) return existing
+  } catch {
+    // 首次运行：下面生成
+  }
+  const token = randomUUID().replace(/-/g, '')
+  await fsp.mkdir(path.dirname(tokenFile), { recursive: true })
+  await fsp.writeFile(tokenFile, `${token}\n`, { mode: 0o600 })
+  logger.info(`whalepet: 已生成 iPad 访问令牌，保存在 ${tokenFile}`)
+  return token
+}
+
+/** 判断错误是否为「会话不存在」（会话被 GUI 删掉后重建用）。 */
+function isNotFound(error) {
+  const code = error?.code ?? error?.details?.code ?? ''
+  const message = String(error?.message ?? '')
+  return String(code).includes('not-found') || /not[- ]?found|不存在/i.test(message)
+}
+
+export function apply(ctx, config = {}) {
+  // 注意：cordis 的 logger 是「可调用服务代理」，info/warn/error 内部要靠
+  // this 拿到当前 fiber 的 Logger（this() -> LoggerService[symbols.invoke]）。
+  // 把方法摘下来直接调用会丢 this，报 "TypeError: this is not a function"，
+  // 插件加载时抛错会直接把整个 dsh 进程带走（PM2 重启循环 → 3080 端口起不来）。
+  // 所以必须以 ctx.logger 的方法形式调用，保留 this；并且再包一层 prevent 宿主崩溃。
+  const logger = {
+    info: (message) => safeLog(ctx, 'info', message),
+    warn: (message) => safeLog(ctx, 'warn', message),
+    error: (message) => safeLog(ctx, 'error', message),
+  }
+
+  const dataDir = typeof config.dataDir === 'string' && config.dataDir.trim()
+    ? path.resolve(config.dataDir.trim())
+    : DEFAULT_DATA_DIR
+  const sessionDir = path.join(dataDir, 'workspace')
+  const stateFile = path.join(dataDir, 'sessions.json')
+  const requestTimeoutMs = Math.max(10000, Number(config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) || DEFAULT_REQUEST_TIMEOUT_MS)
+  const maxWaitMs = Math.max(requestTimeoutMs, Number(config.maxWaitMs ?? DEFAULT_MAX_WAIT_MS) || DEFAULT_MAX_WAIT_MS)
+  const approvalPolicy = config.approvalPolicy === 'ask' ? 'ask' : 'never'
+  // 默认 workspace-write：宠物像 Super Agent 一样能读能写，但只限它自己的工作目录。
+  // 显式传空字符串表示「不动权限预设，只钉审批策略」。
+  const permissionPreset = Object.prototype.hasOwnProperty.call(config, 'permissionPreset')
+    ? (typeof config.permissionPreset === 'string' ? config.permissionPreset.trim() : '')
+    : 'workspace-write'
+  const persona = typeof config.voicePersona === 'string' && config.voicePersona.trim()
+    ? config.voicePersona.trim()
+    : VOICE_PERSONA
+
+  const speechToText = ctx.speechToText
+  const sessions = ctx.sessionController
+  const permissionPresets = typeof ctx.get === 'function' ? ctx.get('permissionPresets') : undefined
+
+  /** iPad 的 session_id -> DSH SessionId，持久化在 sessions.json。 */
+  const sessionMap = new Map()
+  const askQueues = new Map()
+  const prepared = new Set()
+  /** dshSessionId -> 该 Agent scope 内人格 section 的 disposer。 */
+  const personaDisposers = new Map()
+  let bridge = null
+
+  const persistSessions = () => writeJson(stateFile, Object.fromEntries(sessionMap))
+
+  /** 取（或创建）iPad session 对应的 DSH 会话 id。 */
+  const ensureSession = async (petSessionId) => {
+    const existing = sessionMap.get(petSessionId)
+    if (existing) return existing
+    const dshSessionId = `whalepet-session-${randomUUID()}`
+    await sessions.create({ sessionId: dshSessionId, cwd: sessionDir })
+    sessionMap.set(petSessionId, dshSessionId)
+    await persistSessions()
+    return dshSessionId
+  }
+
+  /**
+   * 在宠物 Agent 自己的 scope 里注册语音人格提示；只注册一次。
+   * ``agent.ctx.systemPrompt.section`` 按调用方 scope 生效，因此不会污染其它会话。
+   */
+  const ensurePersona = (agent, dshSessionId) => {
+    if (!agent || personaDisposers.has(dshSessionId)) return
+    try {
+      const dispose = agent.ctx.systemPrompt.section({
+        name: 'whalepet:voice-persona',
+        order: 900,
+        text: persona,
+        interpolate: false,
+      })
+      if (typeof dispose === 'function') personaDisposers.set(dshSessionId, dispose)
+    } catch (error) {
+      logger.warn(`whalepet: 注册语音人格失败: ${error?.message ?? error}`)
+    }
+  }
+
+  /** 新会话：权限预设 + 审批策略 + 语音人格。 */
+  const applySessionSetup = async (dshSessionId) => {
+    if (prepared.has(dshSessionId)) return
+    let agent
+    try {
+      const resolved = await sessions.resolveAgent(dshSessionId)
+      agent = resolved?.agent
+    } catch (error) {
+      logger.warn(`whalepet: 解析会话 Agent 失败: ${error?.message ?? error}`)
+      return
+    }
+    if (!agent) return
+
+    // 权限预设决定沙箱 + 审批的组合；配了就用预设（Super Agent 需要能写工作区），
+    // 没配就只把审批策略钉死，避免语音场景挂在等待批准上。
+    if (permissionPreset && permissionPresets && typeof permissionPresets.set === 'function') {
+      try {
+        permissionPresets.set(agent.session, permissionPreset)
+      } catch (error) {
+        logger.warn(`whalepet: 应用权限预设 ${permissionPreset} 失败: ${error?.message ?? error}`)
+      }
+    } else {
+      try {
+        ctx.approval.setPolicy(agent, approvalPolicy)
+      } catch (error) {
+        logger.warn(`whalepet: 设置审批策略失败: ${error?.message ?? error}`)
+      }
+    }
+    ensurePersona(agent, dshSessionId)
+    prepared.add(dshSessionId)
+  }
+
+  /**
+   * 等宠物 Agent 这一轮结束：允许多次 wait，最长 maxWaitMs。
+   * 超时但不是彻底失败时，把已经产生的回复带回（比空白强）。
+   */
+  const waitForReply = async (dshSessionId, afterSeq, signal) => {
+    const startedAt = Date.now()
+    let best = ''
+    for (;;) {
+      const slice = Math.max(5000, Math.min(requestTimeoutMs, maxWaitMs - (Date.now() - startedAt)))
+      const waited = await sessions.wait({
+        sessionId: dshSessionId,
+        afterSeq,
+        timeoutMs: slice,
+      }, signal)
+      const text = toSpeechText(lastAssistantText(waited?.output?.records))
+      if (text) best = text
+      if (waited?.reason === 'idle') {
+        if (best) return best
+        throw new Error('DSH 没有返回文字回复')
+      }
+      if (waited?.reason === 'input-required') {
+        return best || '这一步需要你在 DSH 里确认一下，去会话列表看看。'
+      }
+      // timeout：还在跑就继续等，直到 maxWaitMs。
+      if (Date.now() - startedAt >= maxWaitMs) {
+        if (best) return best
+        throw new Error('DSH 响应超时')
+      }
+      signal?.throwIfAborted?.()
+    }
+  }
+
+  const adapter = {
+    async health() {
+      try {
+        const snapshot = speechToText.snapshot()
+        const selected = snapshot.selection?.providerId
+        const provider = snapshot.providers?.find((entry) => entry.id === selected)
+        const phase = provider?.preparation?.phase ?? 'unprepared'
+        if (provider && (phase === 'unprepared' || phase === 'standby')) {
+          // 首次使用时触发模型加载/下载准备；不阻塞 health 响应。
+          try {
+            speechToText.prepare(selected)
+          } catch {
+            // 准备失败会在 transcribe 时给出明确错误
+          }
+        }
+        return {
+          ready: phase === 'ready' || phase === 'waking' || phase === 'loading',
+          detail: `${selected ?? 'unknown'}/${phase}`,
+        }
+      } catch (error) {
+        return { ready: false, detail: `speechToText 不可用: ${error?.message ?? error}` }
+      }
+    },
+
+    async transcribe(wav, { signal } = {}) {
+      const spec = speechToText.resolve({
+        audio: new Uint8Array(wav),
+        language: config.language ?? 'zh',
+      })
+      const transcript = await speechToText.transcribe(spec, signal ?? new AbortController().signal)
+      return transcript?.text ?? ''
+    },
+
+    async prepareSession(petSessionId) {
+      const dshSessionId = await ensureSession(petSessionId)
+      await applySessionSetup(dshSessionId)
+      // 顺手把识别模型预热起来，第一次唤醒能快一点。
+      try {
+        const { selection } = speechToText.snapshot()
+        speechToText.prepare(selection.providerId)
+      } catch {
+        // 忽略
+      }
+    },
+
+    ask(petSessionId, text, { signal } = {}) {
+      const abortSignal = signal ?? new AbortController().signal
+
+      const askOnce = async (dshSessionId) => {
+        await applySessionSetup(dshSessionId)
+        let cursor = 0
+        try {
+          cursor = (await sessions.state({ sessionId: dshSessionId }, abortSignal))?.cursor ?? 0
+        } catch {
+          // 冷会话读不到被动状态时按 0 处理：wait 会返回当前可见的 assistant 记录。
+          cursor = 0
+        }
+        await sessions.prompt({
+          requestId: `whalepet-${randomUUID()}`,
+          sessionId: dshSessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text }],
+          clientTimeZone: 'Asia/Shanghai',
+        }, abortSignal)
+        return waitForReply(dshSessionId, cursor, abortSignal)
+      }
+
+      const run = async () => {
+        const dshSessionId = await ensureSession(petSessionId)
+        try {
+          return await askOnce(dshSessionId)
+        } catch (error) {
+          if (!isNotFound(error)) throw error
+          // 会话在 GUI 里被删了：换一个新会话重试一次。
+          logger.warn(`whalepet: 会话 ${dshSessionId} 已不存在，重新创建`)
+          sessionMap.delete(petSessionId)
+          prepared.delete(dshSessionId)
+          const dispose = personaDisposers.get(dshSessionId)
+          personaDisposers.delete(dshSessionId)
+          try {
+            dispose?.()
+          } catch {
+            // 忽略
+          }
+          const fresh = await ensureSession(petSessionId)
+          return askOnce(fresh)
+        }
+      }
+
+      // 同一会话串行，避免两条语音同时把 prompt 塞进同一 turn。
+      const previous = askQueues.get(petSessionId) ?? Promise.resolve()
+      const current = previous.then(run, run)
+      askQueues.set(petSessionId, current.catch(() => {}))
+      return current
+    },
+
+    async close() {
+      // 服务器关闭由 ctx.effect 的 disposer 负责
+    },
+  }
+
+  // 启动网关（异步初始化；失败只记录日志，不拖垮宿主进程）。
+  ctx.effect(() => {
+    const start = async () => {
+      await fsp.mkdir(sessionDir, { recursive: true })
+      const persisted = await readJson(stateFile, {})
+      for (const [key, value] of Object.entries(persisted)) {
+        if (typeof value === 'string' && value.startsWith('whalepet-session-')) {
+          sessionMap.set(key, value)
+        }
+      }
+      const token = await resolveToken(config, dataDir, logger)
+      const bridgeConfig = normalizeBridgeConfig({
+        ...config,
+        token,
+        language: config.language ?? 'zh',
+      })
+      bridge = createBridgeServer({ adapter, config: bridgeConfig, logger })
+      const address = await bridge.listen()
+      logger.info(`whalepet: iPad 网关已监听 http://${address} （会话目录 ${sessionDir}）`)
+    }
+    start().catch((error) => {
+      logger.error(`whalepet: 网关启动失败: ${error?.stack ?? error}`)
+    })
+    return async () => {
+      const current = bridge
+      bridge = null
+      if (current) {
+        await current.close().catch((error) => logger.warn(`whalepet: 关闭网关出错: ${error?.message ?? error}`))
+        logger.info('whalepet: iPad 网关已停止')
+      }
+      for (const dispose of personaDisposers.values()) {
+        try {
+          dispose()
+        } catch {
+          // 忽略
+        }
+      }
+      personaDisposers.clear()
+      prepared.clear()
+    }
+  }, 'whalepet.bridge')
+}
+
+/** 调 logger 时绝不抛错：日志失败不能变成宿主进程的致命错误。 */
+function safeLog(ctx, level, message) {
+  try {
+    const target = ctx.logger
+    if (target && typeof target[level] === 'function') {
+      target[level](message)
+      return
+    }
+  } catch {
+    // 落到 console
+  }
+  const fallback = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  try {
+    fallback(message)
+  } catch {
+    // 彻底静默
+  }
+}
+
+/** 给传输层用：告知「这轮大概要多久/进度」的节奏（每 8s 一次 thinking 心跳）。 */
+export const progressIntervalMs = PROGRESS_INTERVAL_MS

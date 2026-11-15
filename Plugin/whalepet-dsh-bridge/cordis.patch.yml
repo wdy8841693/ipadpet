@@ -1,0 +1,12 @@
+- insert:
+    - id: whalepet-bridge
+      name: '@dywu/whalepet-dsh-bridge'
+      config:
+        host: 0.0.0.0
+        port: 8787
+        language: zh
+        # 宠物会话 = 完整 DSH Agent：能读写工作区、跑命令、检索网页。
+        # 想更放开可改 danger-full-access；不想动权限就显式写 ''。
+        permissionPreset: workspace-write
+        requestTimeoutMs: 300000
+        maxWaitMs: 600000
