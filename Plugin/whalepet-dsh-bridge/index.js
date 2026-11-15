@@ -160,6 +160,9 @@ export function apply(ctx, config = {}) {
   const sessionTitle = typeof config.sessionTitle === 'string' && config.sessionTitle.trim()
     ? config.sessionTitle.trim()
     : '🐋 鲸鱼娘（自动维护，不用管）'
+  // 自动换新会话：0 = 永远同一个；24 = 每 24 小时换一条（旧的归档）。
+  const rotateAfterHours = Math.max(0, Number(config.rotateAfterHours ?? 24) || 0)
+  const now = typeof config.now === 'function' ? config.now : Date.now
   // 空闲时把会话归档（列表里看不到），下一次说话前自动取消归档。
   const archiveWhenIdle = config.archiveWhenIdle !== false
   const metaFile = path.join(dataDir, 'session-meta.json')
@@ -181,6 +184,17 @@ export function apply(ctx, config = {}) {
   const askQueues = new Map()
   const prepared = new Set()
   let sessionReady = false
+  /** 当前正在使用的宠物会话 id（rotateAfterHours > 0 时按时间桶滚动）。 */
+  let currentSessionId = null
+
+  /** 按时间桶算出该用哪个会话 id；rotateAfterHours = 0 时固定用 mainSessionId。 */
+  const desiredSessionId = () => {
+    if (rotateAfterHours === 0) return mainSessionId
+    const periodMs = rotateAfterHours * 3600 * 1000
+    const bucketStart = Math.floor(now() / periodMs) * periodMs
+    const stamp = new Date(bucketStart).toISOString().slice(0, 13).replace(/[-:]/g, '')
+    return `whalepet-session-${stamp}`
+  }
   /** dshSessionId -> 该 Agent scope 内人格 section 的 disposer。 */
   const personaDisposers = new Map()
   let bridge = null
@@ -224,11 +238,12 @@ export function apply(ctx, config = {}) {
       if (typeof sessions.list !== 'function') return
       const registry = getWorkspaceRegistry()
       if (!registry || typeof registry.archiveSession !== 'function') return
+      const keep = new Set([mainSessionId, desiredSessionId()])
       const listed = await sessions.list({}, new AbortController().signal)
       const legacy = (listed?.items ?? []).filter((row) => (
         typeof row?.sessionId === 'string'
         && row.sessionId.startsWith('whalepet-session-')
-        && row.sessionId !== mainSessionId
+        && !keep.has(row.sessionId)
         && (row.cwd === undefined || row.cwd === sessionDir)
       ))
       for (const row of legacy) {
@@ -249,20 +264,34 @@ export function apply(ctx, config = {}) {
    * 之后永远复用同一个 id（插件重启、iPad 重装都一样）。
    */
   const ensureSession = async () => {
-    if (sessionReady) return mainSessionId
+    const desired = desiredSessionId()
+    if (desired !== currentSessionId) {
+      // 进入新的时间桶（或首次启动）：老会话归档，换新会话。
+      const previous = currentSessionId
+      if (previous) await setArchived(previous, true)
+      currentSessionId = desired
+      sessionReady = false
+      try {
+        const meta = await readJson(metaFile, {})
+        await writeJson(metaFile, { ...meta, currentSessionId: desired })
+      } catch {
+        // 元数据只用于标题/轮换记录，写不了不影响对话
+      }
+    }
+    if (sessionReady) return currentSessionId
     try {
-      const resolved = await sessions.resolveAgent(mainSessionId)
+      const resolved = await sessions.resolveAgent(currentSessionId)
       if (resolved?.agent) {
         sessionReady = true
-        return mainSessionId
+        return currentSessionId
       }
     } catch (error) {
       if (!isNotFound(error)) throw error
     }
-    await sessions.create({ sessionId: mainSessionId, cwd: sessionDir })
-    await ensureSessionTitle(mainSessionId)
+    await sessions.create({ sessionId: currentSessionId, cwd: sessionDir })
+    await ensureSessionTitle(currentSessionId)
     sessionReady = true
-    return mainSessionId
+    return currentSessionId
   }
 
   /**
@@ -458,6 +487,15 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => {
     const start = async () => {
       await fsp.mkdir(sessionDir, { recursive: true })
+      try {
+        const meta = await readJson(metaFile, {})
+        if (typeof meta?.currentSessionId === 'string' && meta.currentSessionId.startsWith('whalepet-session-')) {
+          currentSessionId = rotateAfterHours === 0 ? mainSessionId : meta.currentSessionId
+        }
+      } catch {
+        // 忽略
+      }
+      if (currentSessionId === null) currentSessionId = desiredSessionId()
       const token = await resolveToken(config, dataDir, logger)
       const bridgeConfig = normalizeBridgeConfig({
         ...config,
@@ -466,7 +504,8 @@ export function apply(ctx, config = {}) {
       })
       bridge = createBridgeServer({ adapter, config: bridgeConfig, logger })
       const address = await bridge.listen()
-      logger.info(`whalepet: iPad 网关已监听 http://${address} （宠物会话 ${mainSessionId}，工作目录 ${sessionDir}）`)
+      const rotation = rotateAfterHours > 0 ? `每 ${rotateAfterHours}h 自动换新会话` : '固定单会话'
+      logger.info(`whalepet: iPad 网关已监听 http://${address} （宠物会话 ${currentSessionId}，${rotation}，工作目录 ${sessionDir}）`)
       void archiveLegacySessions()
     }
     start().catch((error) => {

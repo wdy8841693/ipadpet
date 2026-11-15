@@ -230,7 +230,15 @@ async function startPlugin(overrides = {}) {
   const env = createFakeEnv(overrides)
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'whalepet-plugin-'))
   const port = await freePort()
-  apply(env.ctx, { port, host: '127.0.0.1', token: TOKEN, dataDir, ...overrides.config })
+  apply(env.ctx, {
+    port,
+    host: '127.0.0.1',
+    token: TOKEN,
+    dataDir,
+    // 单会话测试默认不轮换；轮换用例自己传 rotateAfterHours + now。
+    rotateAfterHours: 0,
+    ...overrides.config,
+  })
   const base = `http://127.0.0.1:${port}`
   const headers = { Authorization: `Bearer ${TOKEN}` }
   const health = await waitForBridge(base, headers)
@@ -441,6 +449,39 @@ test('启动时归档早期随机 id 的宠物会话，只归档不删', async (
     assert.ok(archived.includes('whalepet-session-legacy-1'), JSON.stringify(archived))
     assert.equal(archived.includes('whalepet-session-main'), false)
     assert.equal(archived.includes('session-unrelated'), false)
+  } finally {
+    await plugin.disposers[0]?.()
+  }
+})
+
+
+test('每 24 小时自动换新会话：旧会话归档，同一时间段内复用', async () => {
+  let clock = Date.parse('2026-11-15T00:10:00+08:00')
+  const plugin = await startPlugin({
+    config: { rotateAfterHours: 24, now: () => clock },
+  })
+  try {
+    const send = (text) => fetch(`${plugin.base}/api/chat`, {
+      method: 'POST',
+      headers: { ...plugin.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: 'pet-a', text }),
+    })
+
+    assert.equal((await send('早上好')).status, 200)
+    assert.equal((await send('再聊一句')).status, 200)
+    // 同一个 24h 时间桶里只建一次会话。
+    assert.equal(plugin.calls.create.length, 1)
+    const first = plugin.calls.create[0].sessionId
+    assert.notEqual(first, 'whalepet-session-main')
+    assert.match(first, /^whalepet-session-\d{8}T\d{2}$/)
+
+    // 第二天同一时间：换新会话，旧的归档。
+    clock += 24 * 3600 * 1000
+    assert.equal((await send('第二天了')).status, 200)
+    assert.equal(plugin.calls.create.length, 2)
+    const second = plugin.calls.create[1].sessionId
+    assert.notEqual(second, first)
+    assert.ok(plugin.calls.archive.some((entry) => entry.sessionId === first), '旧会话应被归档')
   } finally {
     await plugin.disposers[0]?.()
   }

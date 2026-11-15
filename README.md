@@ -122,6 +122,12 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ whalepet-bridge 插件（0.0.0.0:8787
 - 安装/配置/安全说明见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)；
   DSH Host API 与 bundle 打包契约调研见 [Plugin/docs/](Plugin/docs/)。
 
+**会话不用管**：宠物只有一个长期会话，空闲自动归档（列表里看不见），每 24 小时自动换新会话，
+说话前自动恢复——没有"新建会话/清理会话"这回事。
+
+> PM2 部署（可选）：`Tools/deploy/dsh-web.sh` 是直连本地安装的 dsh 入口（不再每次 npx 解析 registry），
+> `Tools/deploy/pm2-switch.sh` 是一次性切换脚本（带失败回退）。见脚本头部注释。
+
 > 旧的 `Server/` Python 桥接仍保留：它自带 faster-whisper + 独立 DSH runtime，适合"隔离宠物"的部署形态；
 > 接工作 DSH 时用插件版。
 

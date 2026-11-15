@@ -54,6 +54,7 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 | `mainSessionId` | `whalepet-session-main` | 宠物唯一的长期会话 id；所有 iPad 共用、重启复用 |
 | `archiveWhenIdle` | `true` | 空闲时归档会话（DSH 列表里看不到），说话前自动取消归档 |
 | `sessionTitle` | `🐋 鲸鱼娘（自动维护，不用管）` | 会话标题，只写一次 |
+| `rotateAfterHours` | `24` | 每 N 小时自动换一条新会话（旧的归档）；`0` = 永久同一个会话 |
 | `dataDir` | `~/.dsh/whalepet` | 令牌、会话映射、宠物会话工作目录的存放位置 |
 | `preRollMs` / `silenceMs` / `maxUtteranceS` / `listenTimeoutS` | `300 / 700 / 20 / 10` | VAD 切句与聆听超时 |
 | `vadFloorDbfs` / `vadMarginDb` / `vadOnsetFrames` | `-55 / 10 / 2` | 能量 VAD 调参 |
@@ -89,7 +90,8 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 - 空闲时把会话**归档**：DSH 会话列表里看不到它；下一次说话前自动取消归档，说完再归档；
 - 会话标题自动写成「🐋 鲸鱼娘（自动维护，不用管）」，只写一次；
 - 早期按设备随机建的 `whalepet-session-<uuid>` 旧会话会被**自动归档**（不删除，可手动恢复）；
-- 会话变长由 DSH 的自动压缩处理，不需要人工清理。
+- **每 24 小时自动换一条新会话**（`rotateAfterHours`）：旧会话归档，新会话继承同一套人格/权限；
+  上下文再长也有 DSH 自动压缩兜底，不需要人工清理。
 
 ## 像 Super Agent 一样工作
 
