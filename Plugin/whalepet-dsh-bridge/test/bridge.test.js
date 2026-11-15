@@ -78,7 +78,7 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     const ok = await fetch(`${base}/api/health`, { headers: { Authorization: `Bearer ${TOKEN}` } })
     assert.equal(ok.status, 200)
     const body = await ok.json()
-    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.1' })
+    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.2' })
   } finally {
     await bridge.close()
   }
@@ -372,6 +372,93 @@ test('WS: 任务开始 / 需要授权 / 完成 三类提醒事件', async () => 
     assert.ok(finishedIndex > responseIndex, 'finished 应在 response 之后')
   } finally {
     client.close()
+    await bridge.close()
+  }
+})
+
+
+test('断线期间完成的任务，重连 hello 后补发 response', async () => {
+  const adapter = {
+    async health() {
+      return { ready: true, detail: 'mock' }
+    },
+    async transcribe() {
+      return '小鲸小鲸 帮我整理资料'
+    },
+    ask(_sessionId, _text, { notify } = {}) {
+      notify?.({ state: 'started', text: '开始执行' })
+      return new Promise((resolve) => setTimeout(() => resolve('断线后完成的结果'), 250))
+    },
+  }
+  const { bridge, port } = await startServer({ adapter })
+  const first = new TestWebSocketClient()
+  const second = new TestWebSocketClient()
+  try {
+    await first.connect({ port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await first.waitFor((event) => event.type === 'ready')
+    first.sendJSON({ type: 'hello', session_id: 'pet-replay' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    first.sendBinary(utterance())
+    await first.waitFor((event) => event.type === 'task' && event.state === 'started')
+
+    // 任务还在跑时拔线。
+    first.close()
+    await new Promise((resolve) => setTimeout(resolve, 450))
+
+    // 重连：握手后应立即收到补发的结果。
+    await second.connect({ port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await second.waitFor((event) => event.type === 'ready')
+    second.sendJSON({ type: 'hello', session_id: 'pet-replay' })
+    const finished = await second.waitFor((event) => event.type === 'task' && event.state === 'finished')
+    assert.match(finished.message.text, /断线/)
+    const response = await second.waitFor((event) => event.type === 'response')
+    assert.equal(response.message.text, '断线后完成的结果')
+  } finally {
+    first.close()
+    second.close()
+    await bridge.close()
+  }
+})
+
+test('重连时任务仍在跑：通知 interrupted，完成后在同一连接补发结果', async () => {
+  const adapter = {
+    async health() {
+      return { ready: true, detail: 'mock' }
+    },
+    async transcribe() {
+      return '小鲸小鲸 做个慢任务'
+    },
+    ask(_sessionId, _text, { notify } = {}) {
+      notify?.({ state: 'started', text: '开始执行' })
+      return new Promise((resolve) => setTimeout(() => resolve('慢任务完成了'), 900))
+    },
+  }
+  const { bridge, port } = await startServer({ adapter })
+  const first = new TestWebSocketClient()
+  const second = new TestWebSocketClient()
+  try {
+    await first.connect({ port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await first.waitFor((event) => event.type === 'ready')
+    first.sendJSON({ type: 'hello', session_id: 'pet-mid' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    first.sendBinary(utterance())
+    await first.waitFor((event) => event.type === 'task' && event.state === 'started')
+    first.close()
+
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await second.connect({ port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await second.waitFor((event) => event.type === 'ready')
+    second.sendJSON({ type: 'hello', session_id: 'pet-mid' })
+    const interrupted = await second.waitFor((event) => event.type === 'task' && event.state === 'interrupted')
+    assert.match(interrupted.message.text, /后台/)
+
+    const response = await second.waitFor((event) => event.type === 'response', { timeoutMs: 5000 })
+    assert.equal(response.message.text, '慢任务完成了')
+    const finished = await second.waitFor((event) => event.type === 'task' && event.state === 'finished')
+    assert.ok(finished)
+  } finally {
+    first.close()
+    second.close()
     await bridge.close()
   }
 })

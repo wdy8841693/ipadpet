@@ -30,7 +30,7 @@ import { VoiceSession, PHASE, WAKE, voiceConfig } from './session.js'
 import { EnergyVad, FrameSplitter, UtteranceSegmenter } from './vad.js'
 import { attachWebSocketServer } from './ws.js'
 
-const PLUGIN_VERSION = '0.2.1'
+const PLUGIN_VERSION = '0.2.2'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 
@@ -80,11 +80,13 @@ export class VoicePipeline {
    * @param {ReturnType<typeof normalizeBridgeConfig>} options.config
    * @param {{info?: Function, warn?: Function, error?: Function}} [options.logger]
    */
-  constructor({ connection, adapter, config, logger }) {
+  constructor({ connection, adapter, config, logger, delivery }) {
     this.connection = connection
     this.adapter = adapter
     this.config = config
     this.logger = logger ?? {}
+    /** 跨连接投递状态（断线重连后补发结果）。 */
+    this.delivery = delivery
     this.session = new VoiceSession(new WakeMatcher(config), config.voice)
     this.vad = new EnergyVad(config.vad)
     this.splitter = new FrameSplitter(config.voice.frameBytes, (frame) => this.#onFrame(frame))
@@ -131,6 +133,11 @@ export class VoicePipeline {
     }
     if (text === 'cancel') {
       this.#cancelCurrent()
+      if (this.delivery) {
+        this.delivery.running = false
+        this.delivery.buffered = null
+        this.delivery.pendingApproval = null
+      }
       this.session.reset()
       this.#resetAudio()
       this.send({ type: 'state', value: 'waiting' })
@@ -172,6 +179,10 @@ export class VoicePipeline {
     }
     this.sessionId = sessionId
     this.helloDone = true
+    if (this.delivery) {
+      this.delivery.subscriber = this
+      this.#flushDelivery()
+    }
     this.logger.info?.(`whalepet: 客户端握手 session=${sessionId}`)
     Promise.resolve()
       .then(() => this.adapter.prepareSession?.(sessionId))
@@ -265,31 +276,62 @@ export class VoicePipeline {
     const controller = new AbortController()
     this.currentController = controller
     const heartbeat = this.#startThinkingHeartbeat()
-    // 任务进度通知：started / approval 由 adapter 上报，finished/failed 由这里补。
+    const delivery = this.delivery
+    if (delivery) {
+      delivery.running = true
+      delivery.sessionId = this.sessionId
+      delivery.buffered = null
+    }
+    /** 把事件送给「当前在线的连接」；断线时 approval 先缓存，其余丢弃。 */
     const notify = (event) => {
-      if (this.closed || !event?.state) return
-      this.send({
-        type: 'task',
-        state: String(event.state),
-        ...(event.text ? { text: String(event.text) } : {}),
-      })
+      if (!event?.state) return
+      const target = delivery?.subscriber
+      if (target && !target.closed) {
+        target.send({
+          type: 'task',
+          state: String(event.state),
+          ...(event.text ? { text: String(event.text) } : {}),
+        })
+      } else if (event.state === 'approval' && delivery) {
+        delivery.pendingApproval = { text: String(event.text ?? '') }
+      }
+    }
+    /** 任务结束：在线就推给当前连接，断线就缓存等重连补发。 */
+    const settle = (result) => {
+      if (generation !== this.generation) return
+      if (delivery) {
+        delivery.running = false
+        delivery.pendingApproval = null
+      }
+      const target = delivery?.subscriber
+      if (target && !target.closed) {
+        if (result.kind === 'error') {
+          target.send({ type: 'task', state: 'failed', text: '出错了' })
+          target.send({ type: 'error', message: `DSH 出错：${result.message}` })
+        } else {
+          target.send({ type: 'response', text: result.text })
+          target.send({ type: 'task', state: 'finished', text: '做完了' })
+        }
+        return
+      }
+      if (delivery) {
+        delivery.buffered = result
+      }
     }
     try {
       const reply = await this.adapter.ask(this.sessionId, command, {
         signal: controller.signal,
         notify,
       })
-      if (this.closed || generation !== this.generation) return
-      this.send({ type: 'response', text: String(reply ?? '') })
-      this.send({ type: 'task', state: 'finished', text: '做完了' })
+      settle({ kind: 'reply', text: String(reply ?? '') })
     } catch (error) {
-      if (this.closed || generation !== this.generation) return
+      if (generation !== this.generation) return
       if (error?.name === 'AbortError') {
-        this.send({ type: 'state', value: 'waiting' })
+        if (delivery) delivery.running = false
+        if (!this.closed) this.send({ type: 'state', value: 'waiting' })
         return
       }
-      this.send({ type: 'task', state: 'failed', text: '出错了' })
-      this.send({ type: 'error', message: `DSH 出错：${describeError(error)}` })
+      settle({ kind: 'error', message: describeError(error) })
     } finally {
       if (heartbeat) clearInterval(heartbeat)
       if (this.currentController === controller) this.currentController = null
@@ -338,11 +380,50 @@ export class VoicePipeline {
     }
   }
 
+  /** 连接断开：停止发送，但**不打断正在跑的任务**——结果留给重连后的新连接。 */
   shutdown() {
     if (this.closed) return
     this.closed = true
     this.#disarmListenTimeout()
+    if (this.delivery?.subscriber === this) this.delivery.subscriber = null
+  }
+
+  /** 服务端/插件真正关闭时才打断任务。 */
+  dispose() {
     this.#cancelCurrent()
+    this.shutdown()
+  }
+
+  /**
+   * 重连后补发断线期间的结果：
+   *   pendingApproval -> approval 提醒
+   *   buffered        -> task finished + response / task failed + error
+   *   仍在跑          -> task interrupted + 持续 thinking
+   */
+  #flushDelivery() {
+    const delivery = this.delivery
+    if (!delivery) return
+    if (delivery.pendingApproval) {
+      const notice = delivery.pendingApproval
+      delivery.pendingApproval = null
+      this.send({ type: 'task', state: 'approval', text: notice.text })
+    }
+    if (delivery.buffered) {
+      const buffered = delivery.buffered
+      delivery.buffered = null
+      if (buffered.kind === 'error') {
+        this.send({ type: 'task', state: 'failed', text: '出错了' })
+        this.send({ type: 'error', message: buffered.message })
+      } else {
+        this.send({ type: 'task', state: 'finished', text: '刚才断线了，任务已经做完' })
+        this.send({ type: 'response', text: buffered.text })
+      }
+      return
+    }
+    if (delivery.running) {
+      this.send({ type: 'task', state: 'interrupted', text: '连接恢复了，刚才的任务还在后台继续' })
+      this.send({ type: 'state', value: 'thinking' })
+    }
   }
 }
 
@@ -503,6 +584,14 @@ export function createBridgeServer({ adapter, config, logger }) {
   })
 
   const pipelines = new Set()
+  // 跨连接投递：断线期间完成的任务，等新连接 hello 后补发（宠物只会有一个活动会话）。
+  const delivery = {
+    subscriber: null,
+    running: false,
+    buffered: null,
+    pendingApproval: null,
+    sessionId: null,
+  }
 
   attachWebSocketServer(server, {
     path: '/api/audio',
@@ -517,7 +606,7 @@ export function createBridgeServer({ adapter, config, logger }) {
       return { ok: true }
     },
     onConnection(connection) {
-      const pipeline = new VoicePipeline({ connection, adapter, config, logger: log })
+      const pipeline = new VoicePipeline({ connection, adapter, config, logger: log, delivery })
       pipelines.add(pipeline)
       connection.on('close', () => pipelines.delete(pipeline))
       pipeline.start()
@@ -544,7 +633,7 @@ export function createBridgeServer({ adapter, config, logger }) {
     async close() {
       for (const pipeline of pipelines) {
         try {
-          pipeline.shutdown()
+          pipeline.dispose()
         } catch {
           // 忽略
         }

@@ -81,7 +81,7 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
   `cancel` / `playback_start` / `playback_end`；其余二进制帧 = 16kHz / 单声道 / 小端 Int16 PCM。
   服务端事件：`ready` / `state(waiting|listening|thinking|speaking)` / `wake` / `transcript` /
   `thinking` / `response` / `error`，以及任务进度：
-  `task{state:"started"|"approval"|"finished"|"failed", text}`。
+  `task{state:"started"|"approval"|"interrupted"|"finished"|"failed", text}`。
   `approval` 表示 Agent 需要你在 DSH 里授权/回答；插件会**继续等待**，你点完同意后任务自动接着跑。
 
 ## 不用管理会话
@@ -103,10 +103,15 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 |---|---|---|
 | `task{state:"started"}` | prompt 已被 Agent 接受 | 气泡「开始执行，我这就去办」 |
 | `task{state:"approval"}` | `wait()` 返回 `input-required`（有待批准的授权/问题） | 气泡 + **语音播报**「有个操作需要你授权…」 |
+| `task{state:"interrupted"}` | 断线重连时任务仍在后台跑 | 气泡「连接恢复了，任务还在后台继续」 |
 | `task{state:"finished"}` | 本轮结束、`response` 之后 | 气泡「做完了」 |
 | `task{state:"failed"}` | 本轮出错 | 气泡「出错了」+ error 事件 |
 
 授权后**不用重新下指令**：插件在 `input-required` 期间继续 `wait()`，你在 DSH 里点完同意，任务会自己接着跑完。
+
+**断线不丢结果**：WebSocket 断开时插件不会打断正在跑的任务；任务在后台跑完会把结果缓存，
+新连接 `hello` 后自动补发（`task finished` + `response`，文案带「刚才断线了」）；
+若重连时任务仍在跑，会先发 `task interrupted` 并继续 thinking。
 
 ## 像 Super Agent 一样工作
 

@@ -211,6 +211,10 @@ final class VoiceController: NSObject {
             let message = text ?? "有个操作需要你在 DSH 里确认一下"
             onTaskNotice?(message)
             speak(message)
+        case "interrupted":
+            // 断线重连时任务还在后台跑：只上气泡，避免和进行中的播报/采集抢状态。
+            self.state = .thinking
+            onTaskNotice?(text ?? "连接恢复了，任务还在后台继续")
         case "finished":
             onTaskNotice?("做完了")
         case "failed":
