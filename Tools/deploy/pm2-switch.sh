@@ -9,13 +9,13 @@
 # 日志：Tools/deploy/pm2-switch.log
 set -u
 
-LOG=/home/dywu/Samba/workspace/ipadpet/Tools/deploy/pm2-switch.log
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG="$SCRIPT_DIR/pm2-switch.log"
 exec >>"$LOG" 2>&1
 
-PM2=/home/dywu/.hermes/node/bin/pm2
-[ -x "$PM2" ] || PM2=$(command -v pm2)
-WRAPPER=/home/dywu/Samba/workspace/ipadpet/Tools/deploy/dsh-web.sh
-CWD=/home/dywu/.dsh/profiles/web
+PM2=$(command -v pm2)
+WRAPPER="$SCRIPT_DIR/dsh-web.sh"
+CWD="${DSH_PROFILE_DIR:-$HOME/.dsh/profiles/web}"
 
 health() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3080/ 2>/dev/null || true

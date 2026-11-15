@@ -26,7 +26,7 @@ iPad 本地 TTS ◀── response 文本 ─────────┘（音�
 
 ```
 plugin_manager { action: "install_bundle",
-                 target: "/home/dywu/Samba/workspace/ipadpet/Plugin/whalepet-dsh-bridge" }
+                 target: "<你的克隆路径>/ipadpet/Plugin/whalepet-dsh-bridge" }
 ```
 
 安装会改 profile 的 `package.json`（加依赖 + bundle 列表），**不会**改 `cordis.patch.yml`；卸载用

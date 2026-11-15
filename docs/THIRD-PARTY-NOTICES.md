@@ -39,7 +39,8 @@ MIT 许可全文见上游包 `LICENSE`，要点：保留版权声明与许可文
 
 - [VPet-Simulator](https://github.com/LorisYounger/VPet)（Apache-2.0；默认动画另有 VUP 团队版权条款）：状态机+数值+互动架构思路。
 - [Shijima / libshijima](https://github.com/pixelomer/Shijima-Qt)（GPL-3.0）：Shimeji 行为划分思路。
-- [N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O)：主动陪伴交互启发。
+- [N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O)（Apache-2.0）：主动陪伴交互启发。
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT）：宿主平台，插件仅调用其公开 Host API，未复制源码。
 
 ## 3. 本仓库原创部分
 

@@ -12,30 +12,36 @@
 
 全部 Swift 代码与背景/特效素材为本仓库原创。以下开源项目仅在**设计思路**层面提供参考：
 
-## VPet-Simulator（虚拟桌宠模拟器）
+### VPet-Simulator（虚拟桌宠模拟器）
 - 仓库：https://github.com/LorisYounger/VPet
-- 许可证：GPL-3.0
+- 许可证：Apache-2.0（默认动画素材版权归 VUP-Simulator 团队，另有授权条款）
 - 参考点：
   - 「状态机 + 数值（饱食/心情/体力）+ 互动触发」的桌宠三层架构；
   - 摸头/投喂/提起等互动与动画状态的映射关系；
   - 低状态时宠物"变蔫、求关注"的情感化反馈。
 - 差异：VPet 面向 Windows/WPF 且支持创意工坊与 200+ 动画；本项目面向 iPadOS 15 单设备，用 SpriteKit 分层部件 + 程序化动画替代序列帧，规模刻意精简。
 
-## Shijima / libshijima（Shimeji 系）
+### Shijima / libshijima（Shimeji 系）
 - 仓库：https://github.com/pixelomer/Shijima-Qt （及 Shijima-iOS / Shijima-Android / Shijima-Web）
 - 许可证：GPL-3.0
 - 参考点：Shimeji 行为脚本（走动/攀爬/拖拽/落下）的状态划分方式。
 - 差异：Shijima-iOS 通过越狱插件把宠物注入系统桌面；iOS 沙箱不允许正规 App 这样做，因此本项目改为**全屏 App 内海底场景**，这是 iPadOS 15 上无需越狱的唯一合规形态。
 
-## N.E.K.O
+### N.E.K.O
 - 仓库：https://github.com/Project-N-E-K-O/N.E.K.O
+- 许可证：Apache-2.0
 - 参考点：桌宠主动搭话、按心情选台词的陪伴感设计。
 - 差异：N.E.K.O 依赖 LLM 与 Live2D；本项目台词为本地静态语料库，零网络、零推理开销，适配 A8 老设备。
 
-## 其他
-- Apple SpriteKit / SKAction：系统框架，程序化动画的基础。
-- Pillow：素材导入/生成脚本使用的 Python 图像库（BSD 类许可）。
+### 运行平台与系统框架
+- **[DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)**（MIT）：本项目的宿主平台。
+  DSH 插件按官方 Host API / bundle 契约编写（调研笔记见 [refs/](refs/)），语音识别复用其
+  `speech-to-text` 服务（SenseVoice 本地模型），会话复用其官方 sessionController——本项目未复制 DSH 源码，
+  仅作为插件调用其公开接口。
+- **Apple SpriteKit / AVFoundation / UIKit**：系统框架，程序化动画、音频采集与 TTS 的基础。
+- **[Pillow](https://github.com/python-pillow/Pillow)**（MIT-CMU）：素材导入/生成脚本使用的 Python 图像库（开发期工具，不随 App 分发）。
 
 注意：VPet 默认动画版权归 VUP-Simulator 团队（另有授权条款），Shijima 为 GPL-3.0——
-本项目**未使用**它们的任何素材，仅参考思路，不触发其许可义务。
-实际使用的 dsh-whale-musume 为 MIT，义务仅为保留版权声明（已满足）。
+本项目**未使用**它们的任何代码与素材，仅参考思路，不触发其许可义务。
+实际使用的 dsh-whale-musume 为 MIT，义务仅为保留版权声明（已满足，见
+[LICENSE-dsh-whale-musume.txt](LICENSE-dsh-whale-musume.txt)）。

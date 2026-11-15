@@ -13,7 +13,8 @@ settings:
     TARGETED_DEVICE_FAMILY: "2"        # 仅 iPad
     IPHONEOS_DEPLOYMENT_TARGET: "15.0"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: "RAH58F9C4L"       # 吴老师的 Personal Team（免费 Apple ID）
+    # DEVELOPMENT_TEAM 不入库：在 Xcode → Signing & Capabilities 里选你自己的
+    # Apple ID Personal Team（免费账号即可，7 天签名有效期）。
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 targets:
   WhalePet:

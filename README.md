@@ -85,9 +85,10 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──�
 与 Web 会话控制器；插件只 `inject` 这些服务，不重复插入。
 
 ```bash
-# 在 DSH 里安装插件（绝对路径；安装会写入 profile 的 package.json 与 bundle 列表）
+# 在 DSH 里安装插件（target 填本仓库 Plugin/whalepet-dsh-bridge 的绝对路径；
+# 安装会写入 profile 的 package.json 与 bundle 列表）
 plugin_manager { action: "install_bundle",
-                 target: "/home/dywu/Samba/workspace/ipadpet/Plugin/whalepet-dsh-bridge" }
+                 target: "<你的克隆路径>/ipadpet/Plugin/whalepet-dsh-bridge" }
 ```
 
 - 令牌：首次启动自动生成在 **`~/.dsh/whalepet/ipad-token`**（0600，重启不变）；
@@ -137,7 +138,7 @@ Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）�
 # Linux 侧全量静态自检（Swift 括号、工程配置、纹理引用、显存预算、权限声明、插件测试）
 python3 Tools/scripts/check.py
 
-# 插件单元/集成测试（43 个）
+# 插件单元/集成测试（53 个）
 cd Plugin/whalepet-dsh-bridge && node --test test/*.test.js
 ```
 
@@ -162,6 +163,23 @@ pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-a
 - [插件 README（安装/协议/配置/排障）](Plugin/whalepet-dsh-bridge/README.md)
 - [DSH Host API 调研](docs/refs/dsh-host-api.md) · [bundle 打包契约](docs/refs/dsh-bundle-packaging.md)
 - [开源参考致谢](docs/ACKNOWLEDGEMENTS.md) · [第三方素材许可](docs/THIRD-PARTY-NOTICES.md)
+
+## 参考与借用（开源致谢）
+
+本项目站在这些开源项目的肩膀上，**素材借用 / 思路参考 / 平台依赖**三类分开列清楚：
+
+| 项目 | 许可证 | 与本项目的关系 |
+|---|---|---|
+| [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume) | MIT | **直接借用素材**：鲸鱼娘全部角色立绘（10 张状态图 + AppIcon）来自其 npm 包 v2.5.3，仅做尺寸归一化与 webp→PNG 转换；已保留上游版权声明 |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | MIT | **运行平台**：DSH 插件按官方 Host API 编写，语音识别（SenseVoice）与 Agent 会话复用 DSH 服务；未复制其源码 |
+| [VPet-Simulator](https://github.com/LorisYounger/VPet) | Apache-2.0 | **仅思路参考**：「状态机 + 数值 + 互动」桌宠三层架构、低状态求关注的情感化反馈；未使用任何代码/素材 |
+| [Shijima / libshijima](https://github.com/pixelomer/Shijima-Qt) | GPL-3.0 | **仅思路参考**：Shimeji 行为状态划分；因 iOS 沙箱限制改为全屏 App 内场景；未使用任何代码/素材 |
+| [N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | Apache-2.0 | **仅思路参考**：主动搭话的陪伴感设计；本项目台词为本地静态语料，无 LLM/Live2D 依赖 |
+| [Pillow](https://github.com/python-pillow/Pillow) | MIT-CMU | 开发期工具：素材导入/生成脚本用的 Python 图像库，不随 App 分发 |
+
+全部 Swift 代码、插件 JS 代码、背景/特效素材为本仓库原创（MIT）。
+逐文件映射与许可全文见 **[docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)** 与
+**[docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)**。
 
 ## 已知限制
 
