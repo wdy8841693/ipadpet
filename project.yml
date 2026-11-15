@@ -25,7 +25,7 @@ targets:
       path: WhalePet/Support/Info.plist
       properties:
         CFBundleDisplayName: 鲸鱼娘DSH
-        CFBundleShortVersionString: "1.2.4"
+        CFBundleShortVersionString: "1.2.5"
         CFBundleVersion: "1"
         UILaunchScreen: {}             # iPadOS 15 用空 LaunchScreen 即全屏自适应
         UIRequiresFullScreen: true     # 全屏运行，禁用分屏（老设备省内存）

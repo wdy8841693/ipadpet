@@ -75,7 +75,15 @@ final class PetViewController: UIViewController {
 
     private func handleMicButton() {
         guard let voice else { return }
-        if voice.state == .disabled {
+        // 关闭态、以及「重连放弃/出错」后都允许点麦克风重新连接。
+        let needsRestart: Bool
+        switch voice.state {
+        case .disabled, .error:
+            needsRestart = true
+        default:
+            needsRestart = false
+        }
+        if needsRestart {
             guard settings.isConfigured else {
                 presentServerSettings()
                 return

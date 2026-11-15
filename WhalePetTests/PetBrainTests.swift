@@ -196,6 +196,13 @@ final class DSHClientReconnectTests: XCTestCase {
         XCTAssertEqual(DSHClient.reconnectDelay(attempt: 0), 1)
         XCTAssertEqual(DSHClient.reconnectDelay(attempt: -3), 1)
     }
+
+    func testGivesUpAfterReconnectLimit() {
+        XCTAssertFalse(DSHClient.shouldGiveUpReconnect(attempt: 0))
+        XCTAssertFalse(DSHClient.shouldGiveUpReconnect(attempt: DSHClient.maxReconnectAttempts - 1))
+        XCTAssertTrue(DSHClient.shouldGiveUpReconnect(attempt: DSHClient.maxReconnectAttempts))
+        XCTAssertTrue(DSHClient.shouldGiveUpReconnect(attempt: DSHClient.maxReconnectAttempts + 1))
+    }
 }
 
 // MARK: - 服务器设置

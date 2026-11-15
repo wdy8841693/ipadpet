@@ -10,7 +10,7 @@
 
 | 部分 | 版本 | 说明 |
 |---|---|---|
-| iPad App（`WhalePet/`） | **v1.2.4** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
+| iPad App（`WhalePet/`） | **v1.2.5** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.2.2** | 局域网网关：ASR / 唤醒词 / 会话 / 任务提醒 |
 
 ![预览](docs/preview.png)
@@ -170,6 +170,7 @@ pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-a
 
 | 版本 | 内容 |
 |---|---|
+| v1.2.5 | 重连放弃阈值（连续 10 次≈3 分钟后转错误态，点麦克风可重试） |
 | v1.2.4 | 断线期间完成的任务在重连后补播；新增 `task interrupted` 态 |
 | v1.2.3 | 断线自动重连（1/2/4/8/16/30s 退避，401 不重试）；重连时补启采集 |
 | v1.2.2 | 任务开始/完成/需要授权提醒；`task` 事件 |

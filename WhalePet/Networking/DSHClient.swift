@@ -72,6 +72,15 @@ final class DSHClient {
         return min(30, pow(2, Double(n - 1)))
     }
 
+    /// 连续重连上限：超过后停止自动重连，等用户手动点麦克风重试。
+    /// 按退避节奏约 3 分钟耗尽（1+2+4+8+16+30×5），足够覆盖短暂断网/路由器重启。
+    static let maxReconnectAttempts = 10
+
+    /// 是否该放弃自动重连（纯函数，便于单测）。
+    static func shouldGiveUpReconnect(attempt: Int) -> Bool {
+        attempt >= maxReconnectAttempts
+    }
+
     var onEvent: ((VoiceEvent) -> Void)?
 
     init(config: Configuration, session: URLSession = .shared) {
@@ -277,6 +286,13 @@ final class DSHClient {
 
     private func scheduleReconnect(reason: String) {
         guard autoReconnect, reconnectWorkItem == nil else { return }
+        // 连续失败到上限就停：继续每 30s 重试只会让用户以为「卡在正在重连」。
+        guard !Self.shouldGiveUpReconnect(attempt: reconnectAttempt) else {
+            autoReconnect = false
+            NSLog("WhalePet: 重连放弃（已重试 %d 次，最后一次原因：%@）", reconnectAttempt, reason)
+            emit(.error("连不上服务器（已重试 \(Self.maxReconnectAttempts) 次），点麦克风按钮重试"))
+            return
+        }
         reconnectAttempt += 1
         let delay = Self.reconnectDelay(attempt: reconnectAttempt)
         emit(.reconnecting(attempt: reconnectAttempt, delay: delay))
