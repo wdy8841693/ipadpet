@@ -78,7 +78,7 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     const ok = await fetch(`${base}/api/health`, { headers: { Authorization: `Bearer ${TOKEN}` } })
     assert.equal(ok.status, 200)
     const body = await ok.json()
-    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.7' })
+    assert.deepEqual(body, { ok: true, asr: true, model: 'mock-sensevoice', version: '0.2.8' })
   } finally {
     await bridge.close()
   }
@@ -153,13 +153,16 @@ test('WS: 完整语音链路（唤醒 -> 聆听 -> 命令 -> 回复）', async (
     const wake = await client.waitFor((event) => event.type === 'wake')
     assert.equal(wake.message.phrase, '小鲸小鲸')
     await client.waitFor((event) => event.type === 'state' && event.value === 'listening')
+    // 只唤醒时宠物先答一句「我在」，然后继续聆听。
+    const ack = await client.waitFor((event) => event.type === 'response' && event.text === '我在')
+    assert.equal(ack.message.text, '我在')
 
     // 第二段语音：命令。
     client.sendBinary(utterance())
     const transcript = await client.waitFor((event) => event.type === 'transcript')
     assert.equal(transcript.message.text, '现在几点了')
     await client.waitFor((event) => event.type === 'state' && event.value === 'thinking')
-    const response = await client.waitFor((event) => event.type === 'response')
+    const response = await client.waitFor((event) => event.type === 'response' && event.text === '现在是下午三点')
     assert.equal(response.message.text, '现在是下午三点')
 
     // 握手时应当调用过 prepareSession。
@@ -459,6 +462,28 @@ test('重连时任务仍在跑：通知 interrupted，完成后在同一连接�
   } finally {
     first.close()
     second.close()
+    await bridge.close()
+  }
+})
+
+
+test('WS: wakeAck 配置为空时，只唤醒不答话', async () => {
+  const adapter = createMockAdapter({ transcripts: ['小鲸小鲸', '现在几点了'], replies: ['三点'] })
+  const { bridge, port } = await startServer({ adapter, config: { wakeAck: '' } })
+  const client = new TestWebSocketClient()
+  try {
+    await client.connect({ port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await client.waitFor((event) => event.type === 'ready')
+    client.sendJSON({ type: 'hello', session_id: 'pet-noack' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    client.sendBinary(utterance())
+    await client.waitFor((event) => event.type === 'wake')
+    await client.waitFor((event) => event.type === 'state' && event.value === 'listening')
+    // 给服务器 300ms 机会发应答；wakeAck 为空时不应有 response。
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.ok(!client.messages.some((message) => message.json?.type === 'response'))
+  } finally {
+    client.close()
     await bridge.close()
   }
 })

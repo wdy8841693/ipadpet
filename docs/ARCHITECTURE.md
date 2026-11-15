@@ -32,7 +32,8 @@
    `ctx.speechToText.transcribe()`，文本经 `textnorm` 归一化后匹配唤醒词。
 2. **命令**：识别文本若是「小鲸小鲸」→ 回 `STATE listening`；若是「小鲸小鲸 + 命令」→ 直接执行；
    聆听态下下一句即命令。
-3. **执行**：`ctx.sessionController.prompt()` 把命令塞进宠物会话；`wait()` 轮询到本轮结束，
+3. **执行**：只说唤醒词时插件先发 `response`「我在」，并在该轮 `playback_end` 后保持聆听态，
+   用户可直接说指令；`ctx.sessionController.prompt()` 把命令塞进宠物会话；`wait()` 轮询到本轮结束，
    从 assistant 记录里取文本，经 `toSpeechText()` 去掉 Markdown 后回 `response`。
 4. **播报**：App 用 `AVSpeechSynthesizer` 本地播报；播报期间发 `playback_start/end`，
    插件暂停拾音，避免自触发。

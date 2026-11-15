@@ -45,6 +45,7 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 | `port` | `8787` | 与 iPad 设置里的端口一致；0 表示内核分配（测试用） |
 | `language` | `zh` | 传给 `ctx.speechToText` 的语言提示 |
 | `wakePhrase` / `wakeAliases` | `小鲸小鲸` + 同音别名 | 唤醒词表 |
+| `wakeAck` | `我在` | 只喊唤醒词时宠物回的一句；空字符串关闭 |
 | `permissionPreset` | `workspace-write` | 宠物会话的权限预设：能读写自己的工作目录、跑命令、检索；写 `''` 表示不改预设 |
 | `approvalPolicy` | `never` | 仅在 `permissionPreset` 为空时生效：`never` 自动拒绝审批（语音场景没人点批准） |
 | `requestTimeoutMs` | `300000` | 单次 `wait` 的超时（Super Agent 任务可能跑几分钟） |

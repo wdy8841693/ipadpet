@@ -30,7 +30,7 @@ import { VoiceSession, PHASE, WAKE, voiceConfig } from './session.js'
 import { EnergyVad, FrameSplitter, UtteranceSegmenter } from './vad.js'
 import { attachWebSocketServer } from './ws.js'
 
-const PLUGIN_VERSION = '0.2.7'
+const PLUGIN_VERSION = '0.2.8'
 const MAX_HTTP_BODY = 64 * 1024
 const MAX_WS_MESSAGE = 512 * 1024
 
@@ -98,6 +98,8 @@ export class VoicePipeline {
     this.generation = 0
     this.currentController = null
     this.helloDone = false
+    /** 只唤醒不说指令时，宠物回一句（空字符串 = 不启用）。 */
+    this.wakeAck = typeof config.wakeAck === 'string' ? config.wakeAck.trim() : '我在'
   }
 
   start() {
@@ -152,6 +154,13 @@ export class VoicePipeline {
     if (text === 'playback_end') {
       this.capturePaused = false
       this.#resetAudio()
+      // 唤醒应答（「我在」）说完后继续听指令，不要退回待唤醒；
+      // 其它播报（回答/提醒）结束才回到待唤醒。
+      if (this.session.phase === PHASE.LISTENING) {
+        this.send({ type: 'state', value: 'listening' })
+        this.#armListenTimeout()
+        return
+      }
       this.session.reset()
       this.send({ type: 'state', value: 'waiting' })
       return
@@ -252,6 +261,8 @@ export class VoicePipeline {
       } else {
         this.send({ type: 'state', value: 'listening' })
         this.#armListenTimeout()
+        // 「我在」：App 收到 response 会念出来；说完后仍然处于聆听态（见 playback_end）。
+        if (this.wakeAck) this.send({ type: 'response', text: this.wakeAck })
       }
       return
     }
@@ -470,6 +481,8 @@ export function normalizeBridgeConfig(raw = {}) {
     token,
     wakePhrase,
     wakeAliases: aliases,
+    /** 只唤醒不说指令时宠物回的一句（空字符串 = 不启用）。 */
+    wakeAck: typeof raw.wakeAck === 'string' ? raw.wakeAck.trim() : '我在',
     language: typeof raw.language === 'string' && raw.language.trim() ? raw.language.trim() : 'zh',
     voice,
     vad,

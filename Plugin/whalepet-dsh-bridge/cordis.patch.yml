@@ -11,6 +11,8 @@
         requestTimeoutMs: 300000
         # 其它 DSH 会话（GUI/其它 agent 开的任务）开始、结束、需要授权时，也让宠物播报一句。
         announceOtherSessions: true
+        # 只喊唤醒词不说指令时，宠物回一句（空字符串 = 不启用）。
+        wakeAck: 我在
         maxWaitMs: 600000
         # 会话策略：只用一个长期会话，空闲时归档（列表里看不到），起来自动恢复。
         mainSessionId: whalepet-session-main

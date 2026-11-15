@@ -449,11 +449,14 @@ test('WS：完整语音链路走通 speechToText + 官方会话', async () => {
     const wake = await client.waitFor((event) => event.type === 'wake')
     assert.equal(wake.message.phrase, '小鲸小鲸')
     await client.waitFor((event) => event.type === 'state' && event.value === 'listening')
+    // 只唤醒时先答「我在」。
+    const ack = await client.waitFor((event) => event.type === 'response' && event.text === '我在')
+    assert.equal(ack.message.text, '我在')
 
     client.sendBinary(utterance())
     const transcript = await client.waitFor((event) => event.type === 'transcript')
     assert.equal(transcript.message.text, '帮我看看天气')
-    const response = await client.waitFor((event) => event.type === 'response')
+    const response = await client.waitFor((event) => event.type === 'response' && event.text === '收到：帮我看看天气')
     assert.equal(response.message.text, '收到：帮我看看天气')
 
     // 送进 speechToText 的必须是合法 WAV（44 字节头）。
