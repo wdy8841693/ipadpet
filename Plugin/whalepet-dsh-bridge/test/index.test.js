@@ -574,8 +574,10 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     assert.match(started.message.text, /SMB/)
 
     status('session-smb', false)
-    const finished = await client.waitFor((event) => event.type === 'task' && event.state === 'finished')
+    // 完成用 response 事件播报（App 各版本都会念出来）
+    const finished = await client.waitFor((event) => event.type === 'response')
     assert.match(finished.message.text, /做完了/)
+    assert.match(finished.message.text, /SMB/)
 
     // 宠物自己的会话（whalepet-session-*）不重复播报
     const before = client.messages.length

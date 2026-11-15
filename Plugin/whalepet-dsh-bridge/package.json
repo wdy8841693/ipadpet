@@ -1,6 +1,6 @@
 {
   "name": "@dywu/whalepet-dsh-bridge",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
   "description": "鲸鱼娘 DSH 局域网网关：把 iPad mini 4 上的 WhalePet 语音/文本接入本机 DSH 的 SenseVoice 与官方会话服务。",

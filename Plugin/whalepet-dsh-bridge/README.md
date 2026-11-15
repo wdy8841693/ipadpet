@@ -100,7 +100,8 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 
 除了宠物自己发起的任务，插件还会监听本机 DSH 的会话事件：
 
-- `api-session/status`：任何会话开始/结束运行 → `开始处理：<会话标题>` / `做完了：<会话标题>`；
+- `api-session/status`：任何会话开始/结束运行 → `task started`「开始处理：<会话标题>」/
+  `response`「做完了：<会话标题>」（完成用 response，App 各版本都会念出来）；
 - `approval/request`：任何会话需要授权 → `有任务需要你授权：<标题>`；
 - `user-questions/request`：需要回答 → `有任务需要你回答：<标题>`；
 - 会话名字优先用标题（`sessionTitle` 服务，插件重启后也能读到已有会话的标题）；

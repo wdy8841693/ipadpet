@@ -276,6 +276,19 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * 用 response 事件播报一句（App 所有版本收到 response 都会 TTS）。
+   * 其它会话的「完成」用它，因为宠物自己的任务有真正的回复内容会播，
+   * 而 task finished 在 App 端只上气泡不出声。
+   */
+  const announceSpeech = (text) => {
+    try {
+      bridge?.announce?.({ type: 'response', text })
+    } catch {
+      // 播报失败不影响任务
+    }
+  }
+
   ctx.effect(() => {
     const offTitle = ctx.on('session/event', (session, event) => {
       try {
@@ -300,7 +313,7 @@ export function apply(ctx, config = {}) {
       if (!shouldAnnounceSession(sessionId)) return
       const label = sessionLabel(sessionId)
       if (running) announceTask('started', label ? `开始处理：${label}` : '有个任务开始处理了')
-      else announceTask('finished', label ? `做完了：${label}` : '有个任务做完了')
+      else announceSpeech(label ? `做完了：${label}` : '有个任务做完了')
     })
     const offApproval = ctx.on('approval/request', (request, next) => {
       try {
