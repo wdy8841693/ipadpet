@@ -129,6 +129,14 @@ async function resolveToken(config, dataDir, logger) {
   return token
 }
 
+/** 小延迟（等待用户授权时轮询用）。 */
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
 /** 判断错误是否为「会话不存在」（会话被 GUI 删掉后重建用）。 */
 function isNotFound(error) {
   const code = error?.code ?? error?.details?.code ?? ''
@@ -348,10 +356,15 @@ export function apply(ctx, config = {}) {
   /**
    * 等宠物 Agent 这一轮结束：允许多次 wait，最长 maxWaitMs。
    * 超时但不是彻底失败时，把已经产生的回复带回（比空白强）。
+   *
+   * 期间通过 notify 给 iPad 发任务进度事件：
+   *   started  —— 任务已提交、开始执行
+   *   approval —— 需要用户在 DSH 里授权/回答；继续等，批准后自动接着跑
    */
-  const waitForReply = async (dshSessionId, afterSeq, signal) => {
+  const waitForReply = async (dshSessionId, afterSeq, signal, notify) => {
     const startedAt = Date.now()
     let best = ''
+    let confirmNotified = false
     for (;;) {
       const slice = Math.max(5000, Math.min(requestTimeoutMs, maxWaitMs - (Date.now() - startedAt)))
       const waited = await sessions.wait({
@@ -366,7 +379,25 @@ export function apply(ctx, config = {}) {
         throw new Error('DSH 没有返回文字回复')
       }
       if (waited?.reason === 'input-required') {
-        return best || '这一步需要你在 DSH 里确认一下，去会话列表看看。'
+        // 需要授权/回答：通知一次，然后继续等——用户在 GUI 里点完，任务会自动往下跑。
+        if (!confirmNotified) {
+          confirmNotified = true
+          const pending = Array.isArray(waited?.state?.pendingInput) ? waited.state.pendingInput : []
+          const needsApproval = pending.includes('approval') || pending.length === 0
+          notify?.({
+            state: 'approval',
+            text: needsApproval
+              ? '有个操作需要你授权，去 DSH 里点一下同意，我再接着做'
+              : '有个问题需要你回答，去 DSH 里回一下，我再接着做',
+          })
+        }
+        if (Date.now() - startedAt >= maxWaitMs) {
+          if (best) return best
+          throw new Error('等你确认后我才能继续（去 DSH 会话列表里点一下）')
+        }
+        await delay(1500)
+        signal?.throwIfAborted?.()
+        continue
       }
       // timeout：还在跑就继续等，直到 maxWaitMs。
       if (Date.now() - startedAt >= maxWaitMs) {
@@ -423,7 +454,7 @@ export function apply(ctx, config = {}) {
       }
     },
 
-    ask(petSessionId, text, { signal } = {}) {
+    ask(petSessionId, text, { signal, notify } = {}) {
       const abortSignal = signal ?? new AbortController().signal
 
       const askOnce = async (dshSessionId) => {
@@ -442,7 +473,8 @@ export function apply(ctx, config = {}) {
           content: [{ type: 'text', text }],
           clientTimeZone: 'Asia/Shanghai',
         }, abortSignal)
-        return waitForReply(dshSessionId, cursor, abortSignal)
+        notify?.({ state: 'started', text: '开始执行，我这就去办' })
+        return waitForReply(dshSessionId, cursor, abortSignal, notify)
       }
 
       const run = async () => {

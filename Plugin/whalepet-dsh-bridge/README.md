@@ -80,7 +80,9 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 - `WS /api/audio`：首条 `{"type":"hello","session_id":"pet-001",...}`；控制消息 `manual_start` /
   `cancel` / `playback_start` / `playback_end`；其余二进制帧 = 16kHz / 单声道 / 小端 Int16 PCM。
   服务端事件：`ready` / `state(waiting|listening|thinking|speaking)` / `wake` / `transcript` /
-  `thinking` / `response` / `error`。
+  `thinking` / `response` / `error`，以及任务进度：
+  `task{state:"started"|"approval"|"finished"|"failed", text}`。
+  `approval` 表示 Agent 需要你在 DSH 里授权/回答；插件会**继续等待**，你点完同意后任务自动接着跑。
 
 ## 不用管理会话
 
@@ -92,6 +94,19 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 - 早期按设备随机建的 `whalepet-session-<uuid>` 旧会话会被**自动归档**（不删除，可手动恢复）；
 - **每 24 小时自动换一条新会话**（`rotateAfterHours`）：旧会话归档，新会话继承同一套人格/权限；
   上下文再长也有 DSH 自动压缩兜底，不需要人工清理。
+
+## 任务进度提醒
+
+语音下达任务后，插件会推三类事件（iPad 端 v1.2.2+ 会显示气泡，关键事件还会语音播报）：
+
+| 事件 | 时机 | iPad 表现 |
+|---|---|---|
+| `task{state:"started"}` | prompt 已被 Agent 接受 | 气泡「开始执行，我这就去办」 |
+| `task{state:"approval"}` | `wait()` 返回 `input-required`（有待批准的授权/问题） | 气泡 + **语音播报**「有个操作需要你授权…」 |
+| `task{state:"finished"}` | 本轮结束、`response` 之后 | 气泡「做完了」 |
+| `task{state:"failed"}` | 本轮出错 | 气泡「出错了」+ error 事件 |
+
+授权后**不用重新下指令**：插件在 `input-required` 期间继续 `wait()`，你在 DSH 里点完同意，任务会自己接着跑完。
 
 ## 像 Super Agent 一样工作
 

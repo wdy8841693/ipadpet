@@ -28,7 +28,7 @@ function notFound() {
 }
 
 /** 造一个假 ctx：实现插件注入的四个 Host 服务。 */
-function createFakeEnv({ transcripts = [] } = {}) {
+function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
   const calls = {
     create: [],
     prompt: [],
@@ -47,6 +47,7 @@ function createFakeEnv({ transcripts = [] } = {}) {
   }
   const live = new Map() // dshSessionId -> { cursor, pending, replies: string[] }
   const transcriptQueue = [...transcripts]
+  const pendingWaits = [...waitQueue]
 
   const sessionController = {
     async create(request) {
@@ -72,6 +73,15 @@ function createFakeEnv({ transcripts = [] } = {}) {
       calls.wait.push(request)
       const session = live.get(request.sessionId)
       if (!session) throw notFound()
+      const scripted = pendingWaits.shift()
+      if (scripted?.kind === 'input-required') {
+        // 模拟「等用户授权」：本轮不产出回复，pendingInput 里带 approval。
+        return {
+          reason: 'input-required',
+          state: { cursor: session.cursor, active: true, running: true, queue: null, pendingInput: ['approval'] },
+          output: { truncated: false, records: [] },
+        }
+      }
       session.cursor += 1
       const text = `收到：${session.pending}`
       return {
@@ -483,6 +493,34 @@ test('每 24 小时自动换新会话：旧会话归档，同一时间段内复�
     assert.notEqual(second, first)
     assert.ok(plugin.calls.archive.some((entry) => entry.sessionId === first), '旧会话应被归档')
   } finally {
+    await plugin.disposers[0]?.()
+  }
+})
+
+
+test('WS: 需要授权时先发 approval 提醒，批准后继续返回最终回复', async () => {
+  const plugin = await startPlugin({
+    transcripts: ['小鲸小鲸 整理一下资料'],
+    waitQueue: [{ kind: 'input-required' }],
+  })
+  const client = new TestWebSocketClient()
+  try {
+    await client.connect({ port: plugin.port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await client.waitFor((event) => event.type === 'ready')
+    client.sendJSON({ type: 'hello', session_id: 'pet-approval' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    client.sendBinary(utterance())
+    const approval = await client.waitFor((event) => event.type === 'task' && event.state === 'approval')
+    assert.match(approval.message.text, /授权/)
+    const response = await client.waitFor((event) => event.type === 'response')
+    assert.equal(response.message.text, '收到：整理一下资料')
+    // 授权期间继续等待：两次 wait 都发生过。
+    assert.ok(plugin.calls.wait.length >= 2)
+    const tasks = client.messages.filter((message) => message.json?.type === 'task').map((message) => message.json.state)
+    assert.deepEqual(tasks, ['started', 'approval', 'finished'])
+  } finally {
+    client.close()
     await plugin.disposers[0]?.()
   }
 })

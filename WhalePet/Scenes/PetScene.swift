@@ -345,6 +345,11 @@ final class PetScene: SKScene {
         showSpeech(text, duration: 10)
     }
 
+    /// 任务进度提醒（开始 / 需要授权 / 完成 / 失败）。
+    func showVoiceNotice(_ text: String) {
+        showSpeech(text, duration: 4)
+    }
+
     /// 语音出错提示。
     func showVoiceError(_ message: String) {
         showSpeech("（\(message)）", duration: 5)

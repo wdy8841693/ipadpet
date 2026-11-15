@@ -335,3 +335,42 @@ test('WS: 长任务期间周期性发 thinking 心跳', async () => {
     await bridge.close()
   }
 })
+
+
+test('WS: 任务开始 / 需要授权 / 完成 三类提醒事件', async () => {
+  const adapter = {
+    async health() {
+      return { ready: true, detail: 'mock' }
+    },
+    async transcribe() {
+      return '小鲸小鲸 帮我整理一下资料'
+    },
+    ask(_sessionId, _text, { notify } = {}) {
+      notify?.({ state: 'started', text: '开始执行，我这就去办' })
+      setTimeout(() => notify?.({ state: 'approval', text: '有个操作需要你授权' }), 40)
+      return new Promise((resolve) => setTimeout(() => resolve('整理好了'), 120))
+    },
+  }
+  const { bridge, port } = await startServer({ adapter })
+  const client = new TestWebSocketClient()
+  try {
+    await client.connect({ port, headers: { Authorization: `Bearer ${TOKEN}` } })
+    await client.waitFor((event) => event.type === 'ready')
+    client.sendJSON({ type: 'hello', session_id: 'pet-task' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    client.sendBinary(utterance())
+    await client.waitFor((event) => event.type === 'response')
+
+    const tasks = client.messages
+      .filter((message) => message.json?.type === 'task')
+      .map((message) => message.json.state)
+    assert.deepEqual(tasks, ['started', 'approval', 'finished'])
+    const responseIndex = client.messages.findIndex((message) => message.json?.type === 'response')
+    const finishedIndex = client.messages.findIndex((message) => message.json?.state === 'finished')
+    assert.ok(finishedIndex > responseIndex, 'finished 应在 response 之后')
+  } finally {
+    client.close()
+    await bridge.close()
+  }
+})

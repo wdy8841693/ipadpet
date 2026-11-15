@@ -41,6 +41,8 @@ final class VoiceController: NSObject {
     var onTranscript: ((String) -> Void)?
     var onResponse: ((String) -> Void)?
     var onError: ((String) -> Void)?
+    /// 任务进度气泡（开始 / 需要授权 / 完成 / 失败）。
+    var onTaskNotice: ((String) -> Void)?
 
     private(set) var state: VoiceState = .disabled {
         didSet { onStateChange?(state) }
@@ -183,12 +185,36 @@ final class VoiceController: NSObject {
             state = .thinking
         case .thinking:
             state = .thinking
+        case .task(let taskState, let text):
+            handleTaskNotice(state: taskState, text: text)
         case .response(let text):
             onResponse?(text)
             speak(text)
         case .error(let message):
             onError?(message)
             state = .error(message)
+        }
+    }
+
+    /// 任务进度提醒：开始 / 需要授权 / 完成 / 失败。
+    /// - started: 气泡提示（不打断播报）
+    /// - approval: 气泡 + 语音播报，确保用户注意到要去授权
+    /// - finished / failed: 只上气泡，结论由后面的 response / error 负责
+    private func handleTaskNotice(state taskState: String, text: String?) {
+        switch taskState {
+        case "started":
+            self.state = .thinking
+            onTaskNotice?(text ?? "开始处理…")
+        case "approval":
+            let message = text ?? "有个操作需要你在 DSH 里确认一下"
+            onTaskNotice?(message)
+            speak(message)
+        case "finished":
+            onTaskNotice?("做完了")
+        case "failed":
+            onTaskNotice?("出错了")
+        default:
+            break
         }
     }
 

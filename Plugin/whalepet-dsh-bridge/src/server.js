@@ -16,7 +16,7 @@
  * @typedef {object} BridgeAdapter
  * @property {() => Promise<{ready: boolean, detail?: string}>} health
  * @property {(wav: Buffer, options?: {signal?: AbortSignal}) => Promise<string>} transcribe
- * @property {(sessionId: string, text: string, options?: {signal?: AbortSignal}) => Promise<string>} ask
+ * @property {(sessionId: string, text: string, options?: {signal?: AbortSignal, notify?: (event: {state: string, text?: string}) => void}) => Promise<string>} ask
  * @property {(sessionId: string) => Promise<void>|void} [prepareSession]
  * @property {() => Promise<void>|void} [close]
  */
@@ -264,16 +264,30 @@ export class VoicePipeline {
     const controller = new AbortController()
     this.currentController = controller
     const heartbeat = this.#startThinkingHeartbeat()
+    // 任务进度通知：started / approval 由 adapter 上报，finished/failed 由这里补。
+    const notify = (event) => {
+      if (this.closed || !event?.state) return
+      this.send({
+        type: 'task',
+        state: String(event.state),
+        ...(event.text ? { text: String(event.text) } : {}),
+      })
+    }
     try {
-      const reply = await this.adapter.ask(this.sessionId, command, { signal: controller.signal })
+      const reply = await this.adapter.ask(this.sessionId, command, {
+        signal: controller.signal,
+        notify,
+      })
       if (this.closed || generation !== this.generation) return
       this.send({ type: 'response', text: String(reply ?? '') })
+      this.send({ type: 'task', state: 'finished', text: '做完了' })
     } catch (error) {
       if (this.closed || generation !== this.generation) return
       if (error?.name === 'AbortError') {
         this.send({ type: 'state', value: 'waiting' })
         return
       }
+      this.send({ type: 'task', state: 'failed', text: '出错了' })
       this.send({ type: 'error', message: `DSH 出错：${describeError(error)}` })
     } finally {
       if (heartbeat) clearInterval(heartbeat)

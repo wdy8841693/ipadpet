@@ -29,6 +29,8 @@ final class DSHClient {
         case thinking
         case response(String)
         case error(String)
+        /// 任务进度提醒：started / approval / finished / failed（服务端 `task` 事件）。
+        case task(state: String, text: String?)
     }
 
     struct Configuration {
@@ -287,6 +289,8 @@ final class DSHClient {
             case "thinking": emit(.thinking)
             case "response": emit(.response(obj["text"] as? String ?? ""))
             case "error": emit(.error(obj["message"] as? String ?? "服务器错误"))
+            case "task":
+                emit(.task(state: obj["state"] as? String ?? "", text: obj["text"] as? String))
             default: break
             }
         default:
