@@ -214,7 +214,10 @@ export function apply(ctx, config = {}) {
   // 这里只负责把事件推给当前连着的 iPad；iPad 不在前台时自然丢弃。
   const announceOtherSessions = config.announceOtherSessions !== false
   const sessionTitles = new Map()
+  /** 会话的首条用户消息（标题还没生成时用它当名字）。 */
+  const sessionPrompts = new Map()
   const sessionRegistry = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined
+  const sessionTitleService = typeof ctx.get === 'function' ? ctx.get('sessionTitle') : undefined
   const PET_SESSION_PREFIX = 'whalepet-session-'
 
   /** 是否是值得播报的「别的会话」。 */
@@ -230,11 +233,37 @@ export function apply(ctx, config = {}) {
     return true
   }
 
-  /** 会话标题（太长截断），拿不到就返回空串。 */
+  /** 从会话标题服务读当前标题（对重启前就存在的会话也有效）。 */
+  const titleFromService = (sessionId) => {
+    if (!sessionTitleService) return ''
+    try {
+      const session = sessionRegistry?.get?.(sessionId)
+      if (!session) return ''
+      const snapshot = sessionTitleService.get(session)
+      const title = typeof snapshot?.title === 'string' ? snapshot.title.trim() : ''
+      if (title) sessionTitles.set(sessionId, title)
+      return title
+    } catch {
+      return ''
+    }
+  }
+
+  /** 把一段用户消息变成短名字（去掉注入的 XML 块/HTML 标签）。 */
+  const promptLabel = (text) => {
+    const cleaned = String(text ?? '')
+      .replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!cleaned) return ''
+    return cleaned.length > 20 ? `${cleaned.slice(0, 20)}…` : cleaned
+  }
+
+  /** 会话名字（太长截断）：优先标题，标题还没生成时用首条用户消息。 */
   const sessionLabel = (sessionId) => {
-    const title = sessionTitles.get(sessionId)
-    if (!title) return ''
-    const trimmed = String(title).replace(/\s+/g, ' ').trim()
+    const title = sessionTitles.get(sessionId) || titleFromService(sessionId) || ''
+    const source = title || sessionPrompts.get(sessionId) || ''
+    const trimmed = String(source).replace(/\s+/g, ' ').trim()
     if (!trimmed) return ''
     return trimmed.length > 24 ? `${trimmed.slice(0, 24)}…` : trimmed
   }
@@ -252,6 +281,16 @@ export function apply(ctx, config = {}) {
       try {
         if (event?.type === 'session/title' && typeof event.data?.title === 'string') {
           sessionTitles.set(session.id, event.data.title)
+          return
+        }
+        if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
+          if (sessionPrompts.has(session.id)) return
+          const content = event.data.content
+          const text = Array.isArray(content)
+            ? content.filter((block) => block?.type === 'text').map((block) => block.text).join(' ')
+            : ''
+          const label = promptLabel(text)
+          if (label) sessionPrompts.set(session.id, label)
         }
       } catch {
         // 忽略
@@ -623,18 +662,6 @@ export function apply(ctx, config = {}) {
         // 忽略
       }
       if (currentSessionId === null) currentSessionId = desiredSessionId()
-      // 预热会话标题：插件重启后，已经存在的会话不会再发 session/title 事件，
-      // 不预热的话跨会话播报会退化成「有个任务开始处理了」。
-      try {
-        const listed = await sessions.list({}, new AbortController().signal)
-        for (const row of listed?.items ?? []) {
-          if (row?.sessionId && typeof row.title === 'string' && row.title.trim()) {
-            sessionTitles.set(row.sessionId, row.title.trim())
-          }
-        }
-      } catch (error) {
-        logger.warn(`whalepet: 预热会话标题失败: ${error?.message ?? error}`)
-      }
       const token = await resolveToken(config, dataDir, logger)
       const bridgeConfig = normalizeBridgeConfig({
         ...config,

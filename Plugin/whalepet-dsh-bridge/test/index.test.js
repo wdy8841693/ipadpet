@@ -158,6 +158,7 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
 
   const disposers = []
   const handlers = new Map()
+  const sessionTitles = {}
   const permissionPresets = {
     set(session, name) {
       calls.permissionPreset.push({ sessionId: session.id, name })
@@ -196,6 +197,15 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     get(service) {
       if (service === 'permissionPresets') return permissionPresets
       if (service === 'workspaceRegistry') return workspaceRegistry
+      if (service === 'sessions') return { get: (id) => ({ id, header: {} }) }
+      if (service === 'sessionTitle') {
+        return {
+          get(session) {
+            const title = sessionTitles[session.id]
+            return title ? { title } : undefined
+          },
+        }
+      }
       return undefined
     },
     speechToText,
@@ -212,7 +222,7 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
     },
   }
 
-  return { ctx, calls, live, disposers, transcriptQueue, handlers }
+  return { ctx, calls, live, disposers, transcriptQueue, handlers, sessionTitles }
 }
 
 /** 卸载插件注册的所有 effect（网关 + 公告监听）。 */
@@ -555,7 +565,8 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     client.sendJSON({ type: 'hello', session_id: 'pet-announce' })
     await new Promise((resolve) => setTimeout(resolve, 60))
 
-    // 标题由插件启动时从会话列表预热得到（见 fake list 里的 session-smb）。
+    // 已有会话的标题从 sessionTitle 服务读取（重启前就存在的会话也有效）。
+    plugin.sessionTitles['session-smb'] = '解决 SMB 权限问题'
     const status = plugin.handlers.get('api-session/status')
     status('session-smb', true)
     const started = await client.waitFor((event) => event.type === 'task' && event.state === 'started')
@@ -572,14 +583,17 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     await new Promise((resolve) => setTimeout(resolve, 80))
     assert.equal(client.messages.length, before)
 
-    // 新的 title 事件也能更新播报文案
-    plugin.handlers.get('session/event')({ id: 'session-new' }, {
-      type: 'session/title',
-      data: { title: '另一项任务' },
+    // 新会话标题还没生成时，用首条用户消息当名字
+    plugin.handlers.get('session/event')({ id: 'session-fresh' }, {
+      type: 'user/message',
+      data: {
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: '帮我修复 SMB 挂载权限' }],
+      },
     })
-    status('session-new', true)
-    const titled = await client.waitFor((event) => event.type === 'task' && event.state === 'started' && /另一项任务/.test(event.text))
-    assert.ok(titled)
+    status('session-fresh', true)
+    const fresh = await client.waitFor((event) => event.type === 'task' && /修复 SMB 挂载权限/.test(event.text ?? ''))
+    assert.ok(fresh)
 
     // 授权请求也播报（waterfall 必须继续 next()）
     const approval = plugin.handlers.get('approval/request')

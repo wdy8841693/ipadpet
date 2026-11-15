@@ -103,7 +103,10 @@ Web 会话控制器（`@deepseek-ai/dsh-api-session-controller`）。插件只 `
 - `api-session/status`：任何会话开始/结束运行 → `开始处理：<会话标题>` / `做完了：<会话标题>`；
 - `approval/request`：任何会话需要授权 → `有任务需要你授权：<标题>`；
 - `user-questions/request`：需要回答 → `有任务需要你回答：<标题>`；
-- 标题来自 `session/title` 事件，过长会截断；宠物自己的会话（`whalepet-session-*`）与 subagent 会话不播报。
+- 会话名字优先用标题（`sessionTitle` 服务，插件重启后也能读到已有会话的标题）；
+  新会话标题还没生成时，用**首条用户消息**当名字（如「开始处理：帮我修复 SMB 挂载权限」）；
+  都没有才退化成「有个任务开始处理了」。过长会截断。
+- 宠物自己的会话（`whalepet-session-*`）与 subagent 会话不播报。
 
 所以你在电脑/手机上开的任务，只要 iPad 上的 App 在前台连着，鲸鱼娘就会随口报一句；`announceOtherSessions: false` 可关掉。
 
