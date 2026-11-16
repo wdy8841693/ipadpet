@@ -62,6 +62,11 @@ for f in pubspec.yaml pubspec.lock analysis_options.yaml .metadata; do
   [ -f "$ROOT/$f" ] && cp "$ROOT/$f" "$WORK/$f"
 done
 
+# 工程可能在 macOS/Windows 之间共享，SMB 上会残留 AppleDouble（._xxx）与 .DS_Store。
+# 它们是二进制垃圾，但名字匹配 *.dart 时会让 `flutter test` 在 UTF-8 解码上直接崩，
+# 所以同步后立刻清掉（它们本来也是 .gitignore 里的东西）。
+find "$WORK" \( -name '._*' -o -name '.DS_Store' -o -name 'Thumbs.db' \) -delete 2>/dev/null || true
+
 # android/local.properties 不入库（含本机路径），构建前补一份
 FLUTTER_SDK="$(dirname "$(dirname "$(command -v "$FLUTTER_BIN")")")"
 if [ -n "${ANDROID_HOME:-}" ]; then
