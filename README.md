@@ -12,7 +12,7 @@
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.0** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
-| Windows 桌宠（`Clients/whalepet_flutter/`） | **0.2.0** | Flutter 透明桌宠：宠物数值/互动 + `/api/agent` 文本通道 + 系统 TTS |
+| Windows 桌宠（`Clients/whalepet_flutter/`） | **0.2.0** | Flutter 透明桌宠：宠物数值/互动 + `/api/agent` 文本通道 + 本地语音（唤醒/听写/播报） |
 
 ![预览](docs/preview.png)
 
@@ -138,9 +138,23 @@ flutter run -d windows        # 调试；或 flutter build windows 出 Release
 - 第一次用先右键 →「设置」，填服务器地址（`http://<DSH 机器 IP>:8787`）与
   `~/.dsh/whalepet/ipad-token` 的内容。
 
-只发**识别后的文本**（`WS /api/agent`），不再上传持续音频；回答用 Windows 系统 TTS 播报。
+只发**识别后的文本**（`WS /api/agent`），不上传持续音频；回答用 Windows 系统 TTS 播报。
+
+本地语音（全离线，零模型下载）：待机只用 SAPI5 中文桌面识别器跑「唤醒词小语法」，
+说「小鲸小鲸」后播「我在」并切到听写语法，识别成文本后上行；播报期间自动闭麦。
+需要麦克风；没有麦克风也可以用 `WHALEPET_VOICE_WAV=<wav>` 注入音频跑通全链路
+（开发验证用，见客户端 README）。
+
 数据在 `%APPDATA%\WhalePet\`：设置明文、令牌 DPAPI 加密、宠物存档原子写。
-第一版**没有本地唤醒/识别**（sherpa-onnx 留到下一阶段），详见
+
+出便携包：
+
+```bash
+flutter build windows --release
+python tool/package_release.py --no-build   # dist/whalepet-windows-x64-<version>.zip
+```
+
+实现细节、与架构文档的偏差、真机踩坑记录见
 [客户端 README](Clients/whalepet_flutter/README.md)。
 
 ## 配置（插件）
