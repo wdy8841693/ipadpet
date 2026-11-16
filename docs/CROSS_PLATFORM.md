@@ -896,6 +896,16 @@ whalepet-main
 - 如增加 `SFSpeechRecognizer` Provider，必须检查 `supportsOnDeviceRecognition`，并设置 `requiresOnDeviceRecognition`；
 - 发布时处理签名、公证和 App Sandbox 麦克风 entitlement。
 
+> **落地状态（2026-11-16）**：窗口与系统 TTS 已实现；本地语音目前用的是
+> `SFSpeechRecognizer` Provider（**不是**上面写的 sherpa-onnx）：采集在
+> `macos/Runner/VoiceEngine.swift`（AVAudioEngine），识别在本机完成
+> （`requiresOnDeviceRecognition`），Dart 侧只收事件。唤醒判定放在
+> `core/voice/voice_event_router.dart`（纯 Dart，可单测）。换 sherpa-onnx 时
+> 只需替换原生实现，Dart 侧不动。「多显示器变化后重新约束窗口位置」也已落地
+> （原生 `didChangeScreenParameters` → `screensChanged` → 重读工作区并夹回）。
+> 详见
+> [`Clients/whalepet_flutter/README.md`](../Clients/whalepet_flutter/README.md)。
+
 ### 10.3 Windows
 
 第一版优先支持 Windows 10/11 x64，其他架构后补。

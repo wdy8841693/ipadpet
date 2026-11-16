@@ -597,7 +597,15 @@ class VoiceSessionCoordinator {
     if (_speaking) return;
     if (!_speakEnabled()) {
       queue.clear();
-      _settle(gen);
+      // 播报被关掉时，唤醒应答念不出来，但语音状态机照样要往前走：
+      // 直接进入聆听，而不是退回待唤醒（否则「唤醒 → 说指令」整条链在
+      // 关闭播报后是断的：说完「小鲸小鲸」就被丢回待机）。
+      final VoiceSessionState target = _resumeAfterSpeech;
+      if (target == VoiceSessionState.listening) {
+        unawaited(_beginListening(gen));
+      } else {
+        _settle(gen);
+      }
       return;
     }
     final SpeechItem? item = queue.take();

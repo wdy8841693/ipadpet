@@ -17,12 +17,27 @@ import '../../core/platform/window_placement.dart';
 ///   - 唯一用 FFI 的地方是全局光标：CoreGraphics 的光标坐标恰好就是
 ///     「左上角原点」的全局坐标，与 Dart 语义直接对齐，而且接口是同步的
 ///     （`cursorPosition()` 在 `DesktopWindowAdapter` 里是同步方法，不能走 channel）。
-class MacOSDesktopWindow implements DesktopWindowAdapter {
-  MacOSDesktopWindow();
+class MacOSDesktopWindow implements DesktopWindowAdapter, DisplayChangeAware {
+  MacOSDesktopWindow() {
+    // 原生侧在「显示器参数变化」时会回调这个通道，桌宠据此重新约束位置。
+    _channel.setMethodCallHandler(_onNativeCall);
+  }
 
   static const MethodChannel _channel = MethodChannel('whalepet/window');
 
+  final StreamController<void> _displayChanges =
+      StreamController<void>.broadcast();
+
   bool _ready = false;
+
+  @override
+  Stream<void> get displayChanges => _displayChanges.stream;
+
+  Future<void> _onNativeCall(MethodCall call) async {
+    if (call.method == 'screensChanged') {
+      if (!_displayChanges.isClosed) _displayChanges.add(null);
+    }
+  }
 
   // -- CoreGraphics FFI：全局光标位置 ---------------------------------------
 
@@ -151,6 +166,7 @@ class MacOSDesktopWindow implements DesktopWindowAdapter {
   Future<void> dispose() async {
     // 窗口由原生层持有，App 退出时统一释放；这里只复位状态。
     _ready = false;
+    if (!_displayChanges.isClosed) await _displayChanges.close();
   }
 
   static double _d(Object? value) =>

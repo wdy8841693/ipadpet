@@ -374,6 +374,30 @@ void main() {
       await rig.dispose();
     });
 
+    test('关掉播报时唤醒仍然进入聆听（应答念不出来也不该丢指令）', () async {
+      // 回归：播报被关掉时，唤醒应答「我在」念不出来，但语音状态机不能
+      // 因此把这一轮退回待唤醒——否则用户说完「小鲸小鲸」就没下文了。
+      final Rig rig = Rig(speakEnabled: false);
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceWakeDetectedEvent(
+        keyword: '小鲸小鲸',
+        confidence: 0.8,
+      ));
+      await rig.pump();
+      expect(rig.speech.spoken, isEmpty);
+      expect(rig.coordinator.state, VoiceSessionState.listening);
+      expect(rig.engine.log, contains('listen'));
+
+      rig.engine.emit(const VoiceFinalTranscriptEvent(
+        text: '查天气',
+        confidence: 0.8,
+      ));
+      await rig.pump();
+      expect(rig.sent.single['text'], '查天气');
+      expect(rig.sent.single['source'], 'voice');
+      await rig.dispose();
+    });
+
     test('麦克风不可用：进入 error，但文本对话仍可用', () async {
       final Rig rig = Rig();
       await rig.coordinator.enable();

@@ -73,6 +73,12 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
       _voiceState = state;
       notifyListeners();
     });
+    // 显示器变了就重新约束窗口位置（§10.2）：插拔外接显示器后桌宠不能
+    // 留在已经不存在的屏幕上。
+    if (window is DisplayChangeAware) {
+      _displaySubscription = (window as DisplayChangeAware).displayChanges
+          .listen((_) => unawaited(_refreshWorkArea()));
+    }
   }
 
   final AppPaths paths;
@@ -105,6 +111,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   StreamSubscription<AgentConnectionState>? _stateSubscription;
   StreamSubscription<CoordinatorEvent>? _coordinatorSubscription;
   StreamSubscription<VoiceSessionState>? _voiceStateSubscription;
+  StreamSubscription<void>? _displaySubscription;
   AgentConnectionState _connectionState = AgentConnectionState.disconnected;
   VoiceSessionState _voiceState = VoiceSessionState.disabled;
   String? _token;
@@ -305,6 +312,22 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     }
   }
 
+  /// 显示器/工作区变了：重读工作区并把窗口夹回可见范围。
+  Future<void> _refreshWorkArea() async {
+    if (_disposed || !_windowReady) return;
+    try {
+      final WorkArea area = await window.workArea();
+      _area = area;
+      final WindowRect clamped = clampToWorkArea(_bounds, area);
+      if (clamped.left != _bounds.left || clamped.top != _bounds.top) {
+        _bounds = clamped;
+        await window.setPosition(_bounds.left, _bounds.top);
+      }
+    } catch (_) {
+      // 读不到工作区就保持原样，下一次变化时再试。
+    }
+  }
+
   WindowRect _initialBounds() {
     final double defaultLeft =
         _area.left + (_area.width - PetLayout.windowWidth) / 2;
@@ -364,6 +387,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     unawaited(_stateSubscription?.cancel());
     unawaited(_coordinatorSubscription?.cancel());
     unawaited(_voiceStateSubscription?.cancel());
+    unawaited(_displaySubscription?.cancel());
     unawaited(coordinator.dispose());
     unawaited(_gateway?.dispose());
     unawaited(speech.dispose());

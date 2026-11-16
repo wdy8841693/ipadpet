@@ -22,7 +22,11 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
   private var statusItem: NSStatusItem?
   private var lifecycleChannel: FlutterMethodChannel?
   private var speechChannel: FlutterMethodChannel?
+  private var voiceChannel: FlutterMethodChannel?
+  private var windowChannel: FlutterMethodChannel?
   private var synthesizer: AVSpeechSynthesizer?
+  private var voiceEngine: WhalePetVoiceEngine?
+  private var screenObserver: NSObjectProtocol?
   private var currentUtteranceId: String?
   private var bootstrapped = false
 
@@ -47,6 +51,11 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
   override func applicationWillTerminate(_ notification: Notification) {
     // Dart 侧注册了 persistNow 处理器；给一点时间让写盘完成。
     lifecycleChannel?.invokeMethod("terminating", arguments: nil)
+    voiceEngine?.dispose()
+    if let observer = screenObserver {
+      NotificationCenter.default.removeObserver(observer)
+      screenObserver = nil
+    }
     Thread.sleep(forTimeInterval: 0.15)
     super.applicationWillTerminate(notification)
   }
@@ -73,6 +82,8 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
     channel.setMethodCallHandler { [weak self] call, result in
       self?.handleWindowCall(call, result: result, window: window)
     }
+    windowChannel = channel
+    observeScreenChanges()
 
     lifecycleChannel =
         FlutterMethodChannel(name: "whalepet/lifecycle", binaryMessenger: messenger)
@@ -82,6 +93,14 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
       self?.handleSpeechCall(call, result: result)
     }
     speechChannel = speech
+
+    // 本地语音引擎（§7.4、§10.2）：采集 + 识别都在原生层，Dart 只收事件。
+    let voice = FlutterMethodChannel(name: "whalepet/voice", binaryMessenger: messenger)
+    voice.setMethodCallHandler { [weak self] call, result in
+      self?.handleVoiceCall(call, result: result)
+    }
+    voiceChannel = voice
+    voiceEngine = WhalePetVoiceEngine()
 
     setupStatusItem()
   }
@@ -153,6 +172,69 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
   func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                          didCancel utterance: AVSpeechUtterance) {
     emitSpeechEvent("cancelled")
+  }
+
+  // -- whalepet/voice 通道（本地识别）--------------------------------------
+
+  /// Dart 侧 `MacOSVoiceEngine` 的全部指令。
+  ///
+  /// 事件方向相反：原生层用 `invokeMethod("event", ...)` 把识别结果推给 Dart。
+  private func handleVoiceCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let engine = voiceEngine else {
+      result(FlutterError(code: "voice_not_ready",
+                          message: "语音引擎还没初始化",
+                          details: nil))
+      return
+    }
+    switch call.method {
+    case "initialize":
+      let args = call.arguments as? [String: Any] ?? [:]
+      let locale = (args["culture"] as? String) ?? "zh-CN"
+      engine.initialize(
+        locale: locale,
+        eventSink: { [weak self] payload in
+          self?.voiceChannel?.invokeMethod("event", arguments: payload)
+        },
+        completion: { outcome in
+          // 权限回调不一定在主线程，FlutterResult 必须在平台线程调用。
+          DispatchQueue.main.async {
+            switch outcome {
+            case .success(let info):
+              result(info.asDictionary)
+            case .failure(let error):
+              result(FlutterError(code: "voice_init_failed",
+                                  message: error.localizedDescription,
+                                  details: nil))
+            }
+          }
+        })
+    case "startWakeListening":
+      do {
+        try engine.startWakeListening()
+        result(nil)
+      } catch {
+        result(FlutterError(code: "voice_start_failed",
+                            message: error.localizedDescription,
+                            details: nil))
+      }
+    case "startManualListening":
+      do {
+        try engine.startManualListening()
+        result(nil)
+      } catch {
+        result(FlutterError(code: "voice_start_failed",
+                            message: error.localizedDescription,
+                            details: nil))
+      }
+    case "stopListening":
+      engine.stopListening()
+      result(nil)
+    case "dispose":
+      engine.dispose()
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
   }
 
   // -- 菜单栏状态项 ----------------------------------------------------------
@@ -249,6 +331,21 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  // -- 显示器变化 -------------------------------------------------------------
+
+  /// 插拔显示器 / 改分辨率 / 换主屏之后，工作区会变，桌宠必须重新约束回
+  /// 可见区域（§10.2）。这里只发一个「变了」的信号，具体位置由 Dart 侧重算。
+  private func observeScreenChanges() {
+    guard screenObserver == nil else { return }
+    screenObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.windowChannel?.invokeMethod("screensChanged", arguments: nil)
     }
   }
 

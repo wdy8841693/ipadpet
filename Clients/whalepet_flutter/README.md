@@ -9,9 +9,9 @@
 | `lib/platform/android/`、`speech_output/android_*`、`secure_storage/` | ✅ Android | MethodChannel + 系统 SpeechRecognizer / TextToSpeech / Keystore |
 | `lib/platform/`（Win32 窗口、SAPI 离线 KWS/ASR、TTS） | ✅ Windows | `dart:ffi` + 系统 API，零第三方插件 |
 | `lib/ui/desktop_pet/`（透明桌宠界面） | ✅ Windows / macOS | 气泡、立绘、聊天/设置面板、右键菜单 |
-| `lib/platform/desktop_window/macos_window.dart`、`speech_output/macos_speech.dart` | ✅ macOS（阶段 D 文字版） | MethodChannel `whalepet/window` → 原生 AppKit；`AVSpeechSynthesizer` 播报 |
-| 本地语音（唤醒 → 识别 → 文本 → TTS） | ✅ 双端 | Android 用系统识别服务；Windows 用 SAPI 离线识别 |
-| 一句话带命令（§7.7）、sherpa-onnx 本地模型、AEC/barge-in、macOS 本地唤醒 | ⏳ | 后续增强 |
+| `lib/platform/desktop_window/macos_window.dart`、`speech_output/macos_speech.dart`、`voice/macos_voice_engine.dart` | ✅ macOS | MethodChannel `whalepet/window` → 原生 AppKit；`AVSpeechSynthesizer` 播报；`SFSpeechRecognizer` 本机识别 |
+| 本地语音（唤醒 → 识别 → 文本 → TTS） | ✅ 三端 | Android 用系统识别服务；Windows 用 SAPI 离线识别；macOS 用系统本机识别 |
+| 一句话带命令（§7.7）、sherpa-onnx 本地模型、AEC/barge-in | ⏳ | 后续增强 |
 
 设计依据：[`docs/CROSS_PLATFORM.md`](../../../docs/CROSS_PLATFORM.md) §6（宠物核心）、§7（语音）、§8（`/api/agent`）、§10.3（Windows）、§11（存档与安全）、§12（测试）。
 
@@ -127,7 +127,7 @@ python3 tool/package_release_macos.py    # 打包成 dist/whalepet-macos-<ver>.z
 
 - 服务器地址：`http://<运行 DSH 的机器 IP>:8787`
 - 访问令牌：`~/.dsh/whalepet/ipad-token` 的内容
-- 语音：勾「开启唤醒词常驻侦听」，可改唤醒词、别名（逗号分隔）、唤醒应答（唤醒/听写是 Windows 能力；macOS v1 只支持文字对话 + 系统 TTS）
+- 语音：勾「开启唤醒词常驻侦听」，可改唤醒词、别名（逗号分隔）、唤醒应答（Windows / macOS 都支持唤醒与听写；Android 是系统识别服务）
 
 ## macOS 平台差异
 
@@ -143,10 +143,40 @@ python3 tool/package_release_macos.py    # 打包成 dist/whalepet-macos-<ver>.z
 | 鼠标穿透 | `WS_EX_TRANSPARENT` | `window.ignoresMouseEvents` |
 | 原生拖拽 | `WM_NCLBUTTONDOWN` + `HTCAPTION` | `performDrag(with:)` |
 | 工作区 | `MonitorFromWindow` + `SPI_GETWORKAREA` | `screen.visibleFrame`（自动避开刘海/菜单栏/Dock） |
+| 显示器变化 | 启动时约束一次 | `NSApplication.didChangeScreenParameters` → 原生回调 `screensChanged` → Dart 重读工作区并把窗口夹回可见范围（§10.2） |
 | 全局光标 | `GetCursorPos` | CoreGraphics `CGEventCreate` + `CGEventGetLocation`（FFI，同步） |
 | 系统 TTS | SAPI5（`System.Speech`） | `AVSpeechSynthesizer`（zh-CN） |
 | 令牌存储 | DPAPI 密文 | `~/.whalepet/token.bin` 明文 + 0600（待换 Keychain） |
-| 本地唤醒/识别 | SAPI5 离线识别器 | ⏳ 未接（v1 只支持文字对话） |
+| 本地唤醒/识别 | SAPI5 离线识别器（唤醒词小语法 + 听写语法） | 系统 `SFSpeechRecognizer` **本机识别**（on-device） |
+
+**macOS 本地语音（阶段 D 文字版 → 阶段 E 语音版）**
+
+macOS 端现在也有完整的「唤醒 → 识别 → 文本 → DSH → 播报」闭环：
+
+```text
+麦克风 → AVAudioEngine → SFSpeechAudioBufferRecognitionRequest
+   → SFSpeechRecognizer（requiresOnDeviceRecognition = true）
+   → 事件（partial/final/error）→ MethodChannel whalepet/voice
+   → VoiceEventRouter（core，纯 Dart）：唤醒判定 + 模式路由
+   → /api/agent 只发文本
+   → 回答上屏 + SpeechQueue 去重/优先级
+   → AVSpeechSynthesizer 播报（期间闭麦）
+```
+
+| 项 | 说明 |
+|---|---|
+| 采集与识别 | 全部在 `macos/Runner/VoiceEngine.swift`，PCM 不进 Dart（§7.4） |
+| 权限 | 首次开启语音时申请「麦克风」+「语音识别」；`Info.plist` 已写用途说明 |
+| 本机识别 | `supportsOnDeviceRecognition` 为真时强制 `requiresOnDeviceRecognition = true`；为假时仍可用，但会在引擎信息里标明「可能走 Apple 服务器」 |
+| 唤醒判定 | 系统识别没有关键字语法，只能「常驻识别 + `WakeMatcher` 文本匹配」（与 Android 同一种廉价替代），耗电与延迟不如真 KWS，故默认关闭 |
+| 模式守卫 | 原生事件带 `mode`（wake/listen），切模式前迟到的旧事件直接丢弃（对应 §7.2 的 generation 守卫） |
+| 待机续接 | 识别任务被系统结束（静音/时限）时自动续上；连续快速重启超过 3 次判定引擎卡死并报错 |
+| 已知限制 | 只支持「小鲸小鲸」→「我在」→说指令的第一阶段；一句话带命令（§7.7）还不支持；播报中打断（barge-in）不支持 |
+
+```bash
+# 排障：打印原生引擎的初始化与事件
+WHALEPET_VOICE_DEBUG=1 ./build/macos/Build/Products/Release/whalepet_flutter.app/Contents/MacOS/whalepet_flutter
+```
 
 **为什么令牌先明文**：同机 `~/.dsh/whalepet/ipad-token` 本来就是 0600 明文，威胁模型一致；
 后续换 Keychain（`SecItemAdd`）后再打开 App Sandbox。
@@ -156,7 +186,10 @@ python3 tool/package_release_macos.py    # 打包成 dist/whalepet-macos-<ver>.z
 （实测：通知照发、方法不被调用，`MissingPluginException` 由此而来）。
 初始化必须放在 `applicationWillFinishLaunching`，此时 nib 已加载完、窗口与引擎都已就绪。
 
-## 本地语音链路
+## 本地语音链路（Windows）
+
+> macOS 端的链路见上面的「macOS 平台差异 → macOS 本地语音」；Android 端走系统
+> `SpeechRecognizer`，三端共用同一套 `VoiceSessionCoordinator` 状态机。
 
 ```text
 麦克风 → SAPI5 离线桌面识别器（zh-CN）
@@ -234,6 +267,11 @@ macOS 同构，根目录是 `~/.whalepet/`；令牌先明文 0600（见上「mac
 | §11.3 voice_config 版本 | revision 变化在「等待唤醒」安全点重建 KWS 语法 |
 | §6.3 macOS「窗口即宠物」 | `MacOSDesktopWindow` + `macos/Runner/AppDelegate.swift`（AppKit 透明置顶） |
 | §10.3 macOS 系统 TTS | `MacOSSpeechOutput`（`AVSpeechSynthesizer`，zh-CN） |
+| §7.4 macOS PCM 不穿过 Dart | `macos/Runner/VoiceEngine.swift`：采集 + 识别全在原生层，Dart 只收事件 |
+| §7.5 macOS Provider | `MacOSVoiceEngine`（MethodChannel `whalepet/voice`）+ `VoiceEventRouter`（core，纯 Dart） |
+| §10.2 macOS 本机识别 | `SFSpeechRecognizer` + `requiresOnDeviceRecognition`；不支持时在引擎信息里标明 |
+| §11.3 唤醒词变更 | `VoiceEventRouter.setWakePhrases` 换词表；服务端 revision 变化走协调器重建引擎 |
+| §10.2 macOS 多显示器变化后重新约束窗口 | 原生 `didChangeScreenParameters` → `screensChanged` → `PetRuntime._refreshWorkArea`（`clampToWorkArea`） |
 
 ## 与文档原设计的偏差
 
@@ -246,6 +284,7 @@ macOS 同构，根目录是 `~/.whalepet/`；令牌先明文 0600（见上「mac
 | 窗口随面板缩放 | 固定 380×560 + 透明区域自动穿透 | 尺寸稳定、命中测试简单 |
 | §7.9 Android 用 sherpa-onnx 本地 KWS/ASR | 先用系统 `SpeechRecognizer`（阶段 C 第 2 步） | 不塞模型先打通「说话→执行→播报」；`VoiceEngineAdapter` 已留好替换位 |
 | §7.6 KWS 是低功耗守门器 | 常驻模式用「连续识别 + 唤醒词文本匹配」（默认关） | 系统识别没有关键字语法；耗电/延迟不如真 KWS，故做成可选开关 |
+| §10.2 macOS 用 sherpa-onnx 本地 KWS/ASR | 先用系统 `SFSpeechRecognizer` 本机识别（on-device） | 不塞模型先打通「唤醒→执行→播报」；`VoiceEngineAdapter` 已留好替换位 |
 | §10.1 令牌用 Keystore | 已实现（AES-GCM + Android Keystore） | 与文档一致 |
 | §5 macOS 允许用插件 | 窗口/语音走一条自建 MethodChannel + 系统框架 | 只依赖 AppKit/AVFoundation，不引第三方插件 |
 | §11.2 macOS 令牌加密 | 先 0600 明文落盘，后续换 Keychain | 与同机 `~/.dsh` 令牌的威胁模型一致，先跑通再收紧 |
@@ -345,3 +384,34 @@ python3 tool/package_release_macos.py → dist/whalepet-macos-0.2.0.zip（18.8 M
 
 待手动确认（同一通道，逻辑共用，未做点击自动化）：单击摸头、双击聊天面板、右键菜单、
 按住拖拽、透明区域自动穿透。
+
+### macOS 本地语音（新增，待真机复验）
+
+macOS 端补上本地语音引擎后（`VoiceEngine.swift` + `MacOSVoiceEngine` +
+`VoiceEventRouter`），本机（Linux，无 Xcode）能验证的部分：
+
+```text
+dart test                        → 105 个测试全绿（新增 16 个：路由 14 + 协调器回归 1 + 多屏回归 1）
+dart analyze lib/core lib/platform test → 0 error / 0 warning（flutter_lints 全套）
+flutter analyze                  → 22 个 info（全是既有的 material.dart 弃用与 tool/ 脚本提示）
+pbxproj 结构自检                → 对象引用全部可解析、括号配平、新文件三处就位
+Info.plist 解析                  → NSMicrophoneUsageDescription / NSSpeechRecognitionUsageDescription 已写
+```
+
+**尚未在 macOS 真机验证**（需要一台装了 Xcode 的 Mac）：
+
+1. `flutter build macos` 能否编译通过（`VoiceEngine.swift` 是新加的源文件）；
+2. 首次开启语音时「麦克风」「语音识别」两个系统授权弹窗是否正常出现；
+3. 唤醒 → 识别 → 播报的实际闭环与识别准确率；
+4. `requiresOnDeviceRecognition` 在目标机型上是否真的走本机识别
+   （引擎 ready 事件里会打印 `onDevice`）；
+5. 插拔外接显示器后桌宠是否被拉回可见屏幕。
+
+复验命令：
+
+```bash
+cd Clients/whalepet_flutter
+flutter build macos --release
+WHALEPET_VOICE_DEBUG=1 ./build/macos/Build/Products/Release/whalepet_flutter.app/Contents/MacOS/whalepet_flutter
+```
+

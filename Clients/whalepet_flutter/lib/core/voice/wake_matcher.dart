@@ -61,14 +61,19 @@ class WakeMatcher {
     return false;
   }
 
-  /// 文本里是否含唤醒词（不限句首）。
-  bool contains(String text) {
+  /// 文本里命中的唤醒词（不限句首）；没命中返回 null。
+  ///
+  /// 命中多个时取最长的那个（「小鲸小鲸」优先于「小鲸」）。
+  String? match(String text) {
     final String normalized = _normalize(text);
     for (final String phrase in _sorted) {
-      if (normalized.contains(_normalize(phrase))) return true;
+      if (normalized.contains(_normalize(phrase))) return phrase;
     }
-    return false;
+    return null;
   }
+
+  /// 文本里是否含唤醒词（不限句首）。
+  bool contains(String text) => match(text) != null;
 
   /// 是否是「只有唤醒词、没有有效指令」。
   bool isWakeOnly(String text) => strip(text).isEmpty;

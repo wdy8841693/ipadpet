@@ -49,6 +49,18 @@ abstract interface class DesktopWindowAdapter {
   Future<void> dispose();
 }
 
+/// 可选能力：能感知显示器/工作区变化的窗口适配层（§10.2）。
+///
+/// 插拔显示器、改分辨率、切换主屏之后，工作区会变，窗口必须重新约束回
+/// 可见区域（否则桌宠会留在已经拔掉的屏幕上，看起来像「不见了」）。
+///
+/// 做成独立接口而不是加进 [DesktopWindowAdapter]：不是每个平台都能感知
+/// （Windows 侧目前靠拖拽与启动时约束兜底），用 `is` 判断即可。
+abstract interface class DisplayChangeAware {
+  /// 显示器/工作区发生变化时发出事件（不携带参数，变化后的工作区自己去读）。
+  Stream<void> get displayChanges;
+}
+
 /// 不支持的平台用的空实现：所有调用都是 no-op，便于在 Linux/macOS 上跑 UI 逻辑测试。
 class NoopDesktopWindow implements DesktopWindowAdapter {
   const NoopDesktopWindow();

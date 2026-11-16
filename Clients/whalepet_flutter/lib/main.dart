@@ -16,6 +16,7 @@ import 'platform/speech_output/android_system_tts.dart';
 import 'platform/speech_output/macos_speech.dart';
 import 'platform/speech_output/powershell_speech.dart';
 import 'platform/voice/android_system_voice_engine.dart';
+import 'platform/voice/macos_voice_engine.dart';
 import 'platform/voice/sapi_voice_engine.dart';
 import 'ui/desktop_pet/app.dart';
 import 'ui/desktop_pet/pet_runtime.dart';
@@ -83,7 +84,9 @@ Future<void> _runDesktop() async {
   final String? voiceWav = Platform.environment['WHALEPET_VOICE_WAV'];
   final VoiceEngineAdapter voiceEngine = Platform.isWindows
       ? SapiVoiceEngine(audioFile: voiceWav)
-      : const NoopVoiceEngine();
+      : Platform.isMacOS
+          ? MacOSVoiceEngine()
+          : const NoopVoiceEngine();
 
   final PetRuntime runtime = PetRuntime(
     paths: paths,
