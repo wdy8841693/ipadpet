@@ -4,6 +4,13 @@
 > 编写日期：2026-11-15  
 > 当前基线：iPad App v1.2.6，`whalepet-dsh-bridge` 0.3.0  
 > 目标平台：保留现有 iPadOS App，新增 Android App、macOS 桌宠、Windows 桌宠
+>
+> **实施进度（2026-11-16）**：
+> - 阶段 E（Windows 桌宠）：v1 已完成（`Clients/whalepet_flutter`，0.2.0）
+> - 阶段 D（macOS 桌宠）：v1 已完成到「文字版」——透明置顶桌宠、`/api/agent` 文本通道、系统 TTS、
+>   菜单栏状态项；本地唤醒/识别未接（见 §10.2 的实测偏差）。实现方式与 §3.1 D-03 的预期一致：
+>   窗口与 TTS 走原生适配层（macOS 用 MethodChannel + AppKit，不是 FFI），`core/` 与 `ui/` 未改。
+> - 阶段 A（插件 `/api/agent` + ClientHub）、阶段 B（Dart 宠物核心）：随 E/D 一起落地
 
 ## 1. 文档目的
 
@@ -896,6 +903,26 @@ whalepet-main
 - 如增加 `SFSpeechRecognizer` Provider，必须检查 `supportsOnDeviceRecognition`，并设置 `requiresOnDeviceRecognition`；
 - 发布时处理签名、公证和 App Sandbox 麦克风 entitlement。
 
+**v1 实测落地与偏差（`Clients/whalepet_flutter`，2026-11-16）**：
+
+| 项 | 落地 |
+|---|---|
+| 窗口能力通道 | MethodChannel `whalepet/window`（initialize/workArea/bounds/setPosition/setBounds/setAlwaysOnTop/setSkipTaskbar/setClickThrough/startNativeDrag），实现集中在 `macos/Runner/AppDelegate.swift` |
+| 透明 | `isOpaque=false` + 窗口与 `FlutterViewController` 背景 clear + 去掉 `.titled`；无阴影 |
+| 置顶/全空间 | `window.level = .floating`、`collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]` |
+| 不进 Dock | `Info.plist` 的 `LSUIElement=true` + `setActivationPolicy(.accessory)` |
+| 菜单栏 | `NSStatusItem`（🐳）：显示 / 退出；退出前经 `whalepet/lifecycle` 让 Dart 落盘 |
+| 工作区 | `screen.visibleFrame`（自动排除菜单栏与 Dock） |
+| 全局光标 | CoreGraphics FFI（`CGEventCreate` + `CGEventGetLocation`），坐标本身就是左上原点，和 Dart 语义一致 |
+| 拖拽 | `performDrag(with:)` + `isMovableByWindowBackground` |
+| App Sandbox | v1 关闭（要读写 `~/.whalepet` 并直连内网网关）；令牌先明文 0600，换 Keychain 后再评估开启 |
+| 本地语音 | v1 未接：`VoiceEngine` 用空实现，界面语音入口显示「语音关闭」 |
+
+**一个必须知道的坑**：`FlutterAppDelegate` 只在协议里声明 `applicationDidFinishLaunching`，
+Swift 的重写不会挂到 `applicationDidFinishLaunching:` 这个 ObjC 入口上——现象是
+`FlutterMethodChannel` 全部 `MissingPluginException`（handler 从未注册）、状态项不出现。
+初始化要放到 `applicationWillFinishLaunching`（此时 nib 已加载完，窗口与引擎都可用）。
+
 ### 10.3 Windows
 
 第一版优先支持 Windows 10/11 x64，其他架构后补。
@@ -1093,6 +1120,12 @@ whalepet-main
 - 安全存储、签名和打包。
 
 验收：桌宠可移动、互动、语音对话，关闭窗口后仍可从菜单栏管理或彻底退出。
+
+> **进度（2026-11-16，v1 = 文字版）**：透明置顶桌宠、拖拽/走路/游泳带动窗口、菜单栏状态项、
+> `/api/agent` 文本对话、AVSpeechSynthesizer 播报、存档落盘、Release 打包（`tool/package_release_macos.py`）
+> 全部跑通。**语音对话一项未做**：`VoiceEngine` 为空实现，唤醒/识别留到下一阶段（可接
+> `SFSpeechRecognizer` 或 sherpa-onnx 的 macOS 原生库，接口已解耦）。令牌暂为明文 0600，
+> Keychain 与公证（notarization）待补。
 
 ### 阶段 E：Windows 桌宠
 

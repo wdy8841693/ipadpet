@@ -33,6 +33,10 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# macOS 平台目录里由 flutter 工具生成的部分（不入库）
+macos/Flutter/ephemeral/
+macos/Pods/
+
 # Symbolication related
 app.*.symbols
 

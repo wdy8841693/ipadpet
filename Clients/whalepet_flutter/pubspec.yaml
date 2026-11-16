@@ -1,8 +1,8 @@
 name: whalepet_flutter
 description: >-
   WhalePet 跨平台客户端：阶段 B 的纯 Dart 宠物核心（状态、数值、行为、存档），
-  加上阶段 E 的 Windows 桌宠壳（透明置顶窗口、/api/agent 文本通道、系统 TTS）。
-version: 0.2.0
+  加上阶段 D/E 的桌面桌宠壳（Windows / macOS 透明置顶窗口、/api/agent 文本通道、系统 TTS）。
+version: 0.3.0
 publish_to: none
 
 environment:
