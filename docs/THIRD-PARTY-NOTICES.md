@@ -48,6 +48,18 @@ MIT 许可全文见上游包 `LICENSE`，要点：保留版权声明与许可文
 仅用于早期原生 Java 原型（`Android/`）的 WebSocket；Flutter 客户端与 iPad App 不依赖它们。
 Apache-2.0 要求保留版权与许可声明：jar 内已含各自 `META-INF/LICENSE`/`NOTICE`，未做修改。
 
+### Windows 便携包内的微软可再发行组件
+
+`release/whalepet-windows-x64-*.zip` 按 app-local 方式附带以下微软 DLL（未修改）：
+
+| 文件 | 来源 | 分发依据 |
+|---|---|---|
+| `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll` | Visual C++ 2015-2022 Redistributable | [微软 VC Redist 可再发行条款](https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files)（Distributable Code） |
+| `d3dcompiler_47.dll` | Windows SDK | 同上（DirectX 组件随 VS 生成工具再发行） |
+
+这些是微软专有二进制，**不在本仓库 MIT 许可范围内**，仅按微软再发行条款随便携包分发；
+源码不随仓库提供。Flutter 引擎 `flutter_windows.dll` 为 BSD-3-Clause（Flutter 项目）。
+
 ## 3. 运行时框架与库依赖（不随仓库分发源码）
 
 - **[Flutter / Dart SDK](https://github.com/flutter/flutter)**（BSD-3-Clause）：跨平台客户端

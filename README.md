@@ -282,6 +282,8 @@ pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-a
 
 | 版本 | 内容 |
 |---|---|
+| v1.3.1 | 三端编译产物入库（Android APK / Windows 便携包 / macOS 桌宠包 + SHA256）；修复 device_kind 跟随平台、Windows 便携包附带 VC 运行库；详见 [docs/releases/v1.3.1.md](docs/releases/v1.3.1.md) |
+| v1.3.0 | 跨平台版：Flutter 三端客户端（Android 全屏 / Windows SAPI 离线语音桌宠 / macOS 文字版桌宠）合入主线，插件 0.4.x 新增 `/api/agent` 文本通道 |
 | v1.3.0-android.1 | 新增 Android 版（`Android/`）：SurfaceView + Canvas 渲染、AudioRecord 16k 采集、系统 TTS、OkHttp WebSocket，行为/数值/台词/协议与 iPad 版一致 |
 | v1.2.6 | 前台任务提醒全部改为语音播报（开始/需要授权/断线恢复/失败；完成由回答本身播报） |
 | v1.2.5 | 重连放弃阈值（连续 10 次≈3 分钟后转错误态，点麦克风可重试） |
