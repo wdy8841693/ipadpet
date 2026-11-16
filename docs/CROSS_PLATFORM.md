@@ -1177,10 +1177,10 @@ whalepet-main
 | 阶段 | 状态 | 产物 |
 |---|---|---|
 | A 服务端解耦 | ✅ | 插件 0.4.0：`agent-service.js` / `client-hub.js` / `agent-channel.js` / `reply-text.js`，旧 `/api/audio` 未改 |
-| B Flutter 宠物核心 | ✅ | `Clients/whalepet_flutter/lib/core/`（纯 Dart，66 个测试） |
-| E Windows 桌宠 | ✅ 第一版 | 透明置顶窗口、Win32 FFI 适配层、`/api/agent` 客户端、系统 TTS、设置/聊天面板 |
+| B Flutter 宠物核心 | ✅ | `Clients/whalepet_flutter/lib/core/`（纯 Dart，85 个测试） |
+| E Windows 桌宠 | ✅ 第一版 | 透明置顶窗口、Win32 FFI 适配层、`/api/agent` 客户端、本地离线语音、系统 TTS、设置/聊天面板、便携打包 |
 | C Android / D macOS | ⏳ | 未开始 |
-| Windows 本地语音（KWS/ASR） | ⏳ | 见 17.3 |
+| 一句话带命令 / AEC / barge-in | ⏳ | 见 17.4 |
 
 Windows 版实际落地内容：
 
@@ -1191,31 +1191,83 @@ Windows 版实际落地内容：
   `WM_NCLBUTTONDOWN` 原生拖拽 / `GetCursorPos` 命中测试 / `GetDpiForWindow` 缩放）；
 - 协议：`lib/core/agent/` 完整实现 §8（hello/ready/command/task/response/announcement/error/
   voice_config、`event_id` 去重、`last_received_event_id` 补发、1/2/4/8/16/30s 退避、401/403 停止重试）；
-- 播报：`lib/platform/speech_output/powershell_speech.dart`（常驻一个子进程跑 `System.Speech`），
-  文本走 UTF-8 临时文件，规避 OEM 代码页 936 的转码问题；
+- **语音状态机**：`lib/core/voice/voice_session_coordinator.dart` 实现 §7.2 的 8 个状态、
+  `generation` 丢弃迟到回调、唤醒应答 `resumeAfterSpeech`、10s 聆听超时、空识别重说、
+  取消与断线降级，配 10 个单测；
+- **本地语音 Provider**：`lib/platform/voice/sapi_voice_engine.dart` 用系统自带
+  `MS-2052-80-DESK / zh-CN` 离线桌面识别器，待机只启用唤醒词小语法（KWS），
+  唤醒后切听写语法；`WakeMatcher` 剥整段识别结果里的句首唤醒词；
+- 播报：`lib/platform/speech_output/powershell_speech.dart` + `System.Speech`，
+  播报期间闭麦，`SpeechQueue` 去重/优先级/「回答后不念做完了」；
 - 存储：`%APPDATA%\WhalePet\`，令牌 DPAPI（`CryptProtectData` + 应用附加熵），
   存档原子写并把 Windows `rename` 覆盖语义的差异补掉；
-- 播报队列：`SpeechQueue` 去重 + 优先级 + 「回答过就不再念做完了」。
+- 发布：`tool/package_release.py` 打出便携 zip（含使用说明）。
 
 ### 17.2 与本文档原设计的偏差
 
 | 原设计 | 实际做法 | 原因 |
 |---|---|---|
 | §5 允许用 `window_manager` 等插件 | 全部改用 `dart:ffi` 直连 Win32 | 与插件「零第三方依赖」一致，行为可控，避免插件与 Flutter 版本绑死 |
-| §10.3 托盘图标 | 第一版用宠物右键菜单（含退出/重连/设置） | 自绘托盘需要额外的 `Shell_NotifyIcon` 消息窗口，收益低于成本；菜单已覆盖同样入口 |
-| §10.3 Windows 音频 + sherpa-onnx | 第一版不含本地语音 | 先把「透明窗口 + 协议 + 播报」闭环跑通，语音单独一期（见 17.3） |
-| §7.5 系统 TTS | SAPI 5（`System.Speech`）而非 WinRT | 无额外依赖，系统自带中文音色即可用；WinRT 版本后续可平替同一接口 |
-| 窗口随面板缩放 | 固定 380×560 + 透明区域自动穿透 | 尺寸稳定、命中测试简单；穿透解决了「看不见的矩形挡点击」问题 |
+| §10.3 托盘图标 | 第一版用宠物右键菜单（含退出/重连/设置） | 自绘托盘需要额外的 `Shell_NotifyIcon` 消息窗口，收益低于成本 |
+| §10.3 sherpa-onnx 原生库 | 第一 Provider 用 SAPI5 离线桌面识别 | 本机自带 zh-CN 识别器与中文音色，零模型下载即可跑通全链路；`VoiceEngineAdapter` 已解耦，后续可平替 sherpa-onnx |
+| §7.5 系统 TTS | SAPI 5（`System.Speech`）而非 WinRT | 无额外依赖；WinRT 版本后续可平替同一接口 |
+| 窗口随面板缩放 | 固定 380×560 + 透明区域自动穿透 | 尺寸稳定、命中测试简单；穿透解决「看不见的矩形挡点击」 |
 
-### 17.3 Windows 语音（下一期）
+### 17.3 Windows 子进程通信踩坑（重要）
 
-按 §7 的顺序补：
+实测：**Windows 上向常驻 PowerShell 子进程的 stdin 写第二行及以后，`[Console]::In.ReadLine()`
+永远读不到**（已做最小复现）。这会让「第二条播报」「唤醒后切听写」静默失效。
 
-1. `VoiceEngineAdapter` 的 Windows 实现：WASAPI 采集 → 16kHz 单声道 PCM16；
-2. 先接 sherpa-onnx 整段识别（点击说话），再做 KWS 常驻唤醒；
-3. `VoiceSessionCoordinator` 状态机 + `generation` 丢弃迟到回调（§7.2）；
-4. 播报期间闭麦与恢复延迟（§7.8）；
-5. 一句话带命令（§7.7）。
+最终方案：播报与语音引擎都用**编号命令文件队列** —— Dart 写
+`cmd-000001.json.tmp` → 原子 rename，脚本每 100ms 按序号取走执行，保序且不会丢命令。
+中文一律走 UTF-8 文件（控制台 OEM 代码页 936 会转坏），脚本 stdout 设 UTF-8，
+`.ps1` 写 CRLF（PowerShell 5.1 对纯 LF 的事件 Action 块解析有坑），退出前注销事件订阅
+以免遗留宿主进程。
 
-`lib/core/voice/` 已经预留 `SpeechOutputAdapter` 与 `SpeechQueue`，语音识别只需补
-`VoiceEngineAdapter` 与协调器，不动现有 UI 与协议层。
+### 17.4 语音闭环真机踩坑：三处 generation / 去重 / 重建缺陷
+
+单测全绿之后，应用内跑真实引擎仍然卡在「能唤醒、能看到识别文本，但指令发不出去」。
+把日志和代码对上，发现三个都与「generation 语义」有关的缺陷，均补了回归用例：
+
+1. **引擎事件编号被拿去和会话 generation 比较。** 引擎的 `generation` 是「第几条控制命令」
+   （唤醒 1、闭麦 2、聆听 3…），协调器的是「本次会话第几代」（只有 enable 才 +1）。
+   `if (event.generation != _generation) return;` 于是把唤醒后的 FINAL 全判成迟到事件丢弃。
+   修正：过期结果由引擎自己按 `mode/gen` 过滤，协调器只按状态兜底，不跨层比较编号。
+2. **唤醒应答 id 只按 generation 拼。** 同一轮会话 generation 不变，`ack-<gen>` 在第二轮被播报队列
+   当重复项吞掉 —— 「第一次唤醒有『我在』，之后每次唤醒静默进入聆听」。改为自增序号。
+3. **收尾时重建 KWS 把状态机卡死。** `_rebuildEngine` 只在 `waitingWake` 才干活，而 `_resumeWake`
+   在播报态把重建交给它，结果既不重建也不回待唤醒，宠物永远停在「播报中」，之后不再响应唤醒
+   （启动时 `setConfig` 留下的脏标记会稳定触发）。修正：重建可在任意状态调用（自己停识别 →
+   初始化 → 回待唤醒），并用「引擎已生效的 revision」代替布尔脏标记。
+
+附带修正：待唤醒阶段只启用唤醒小语法，说别的句子必然被 SAPI 拒识，这属于常态，不能弹错误提示，
+更不能拿它重启引擎（否则自我循环重启）。
+
+### 17.5 验证与后续
+
+验证（本机 Windows 11）：`dart test` 89 全绿；`dart analyze lib` 无 error/warning
+（仅剩 Flutter 3.50 对 `package:flutter/material.dart` 的 info 级弃用提示）；
+`flutter build windows --debug/--release` 成功，`tool/package_release.py` 产出
+`dist/whalepet-windows-x64-0.2.0.zip`（13.2 MiB）。
+
+应用内 WAV 全链路（mock `/api/agent` + `WHALEPET_VOICE_WAV`）连续跑通多轮：
+
+```text
+WAKE 1 → stop 2（闭麦播「我在」）→ listen 3
+FINAL 3「孝敬孝敬帮我查一下明天的安排」→ stop 4 → 服务端 command
+response → stop 5（闭麦播回答）→ wake 6 → WAKE 6 → stop 7 → listen 8 → …
+```
+
+服务端每轮都收到 `command`，气泡上屏「收到啦，你说的…」，播完自动回待唤醒。Release 版二进制
+同样跑通。本机无默认录音设备，麦克风实时链路用 WAV 注入验证。
+
+后续按价值排序：
+
+1. 一句话带命令（§7.7）：KWS 命中后把 pre-roll 音频交给 ASR，不再先播「我在」；
+2. 接 sherpa-onnx 替换 SAPI 听写，提升中文长句/噪声准确率（保留 SAPI 作为兜底 Provider）；
+3. 桌面 AEC 与说话打断（barge-in）；
+4. 托盘图标与开机启动；
+5. Android / macOS 客户端复用 `core/`。
+
+`lib/core/voice/` 已预留 `VoiceEngineAdapter`、`SpeechOutputAdapter` 与
+`VoiceSessionCoordinator`，后续替换引擎不动 UI 与协议层。

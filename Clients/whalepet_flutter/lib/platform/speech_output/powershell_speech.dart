@@ -33,40 +33,58 @@ class PowerShellSpeechOutput implements SpeechOutputAdapter {
   bool _disposed = false;
   Directory? _workDir;
   int _counter = 0;
+  int _commandSeq = 0;
   String? _currentUtteranceId;
 
-  static const String _script = r'''
-$ErrorActionPreference = 'Stop'
+  static const String _script = r'''$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
-$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$synth = [System.Speech.Synthesis.SpeechSynthesizer]::new()
 $synth.Rate = 0
 Write-Output 'READY'
-while ($true) {
-  $line = [Console]::In.ReadLine()
-  if ($null -eq $line) { break }
-  $line = $line.Trim()
-  if ($line.Length -eq 0) { continue }
-  if ($line -eq 'QUIT') { break }
+[Console]::Out.Flush()
+$commandDir = $PSScriptRoot
+$seq = 1
+$script:quit = $false
+# Commands come from numbered files, not stdin: on Windows only the first line
+# written to a resident process Console.In is ever observed.
+while (-not $script:quit) {
+  $path = Join-Path $commandDir ("cmd-{0:D6}.json" -f $seq)
+  if (-not (Test-Path -LiteralPath $path)) {
+    Start-Sleep -Milliseconds 80
+    continue
+  }
+  $raw = ''
   try {
-    $msg = $line | ConvertFrom-Json
-    $path = [string]$msg.path
-    $id = [string]$msg.id
-    if (-not (Test-Path -LiteralPath $path)) {
-      Write-Output ('ERR ' + $id + ' missing-file')
+    $raw = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::Delete($path)
+  } catch { $raw = '' }
+  $seq++
+  if ($raw -eq '') { continue }
+  try {
+    $msg = $raw | ConvertFrom-Json
+    if ($msg.cmd -eq 'quit') {
+      $script:quit = $true
       continue
     }
-    $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+    $id = [string]$msg.id
+    $textPath = [string]$msg.path
+    $text = [System.IO.File]::ReadAllText($textPath, [System.Text.Encoding]::UTF8)
     if ($text.Trim().Length -eq 0) {
       Write-Output ('END ' + $id)
+      [Console]::Out.Flush()
       continue
     }
     Write-Output ('START ' + $id)
+    [Console]::Out.Flush()
     $synth.Speak($text)
     Write-Output ('END ' + $id)
+    [Console]::Out.Flush()
   } catch {
     Write-Output ('ERR ' + [string]$_.Exception.Message)
+    [Console]::Out.Flush()
   }
 }
+try { $synth.Dispose() } catch {}
 ''';
 
   @override
@@ -80,7 +98,10 @@ while ($true) {
     }
     _workDir = await Directory.systemTemp.createTemp('whalepet-tts-');
     final File scriptFile = File('${_workDir!.path}${Platform.pathSeparator}speak.ps1');
-    await scriptFile.writeAsString(_script, flush: true);
+    await scriptFile.writeAsString(
+      _script.replaceAll('\n', '\r\n'),
+      flush: true,
+    );
 
     final Process process = await Process.start(
       powerShellPath,
@@ -202,11 +223,11 @@ while ($true) {
 
     final Completer<void> completer = Completer<void>();
     _pending[utteranceId] = completer;
-    _process!.stdin.writeln(jsonEncode(<String, String>{
+    await _sendCommand(<String, dynamic>{
+      'cmd': 'speak',
       'id': utteranceId,
       'path': file.path,
-    }));
-    await _process!.stdin.flush();
+    });
 
     try {
       await completer.future.timeout(const Duration(minutes: 2));
@@ -217,6 +238,19 @@ while ($true) {
       // 单条用完就删，避免临时目录越堆越大。
       unawaited(file.delete().then((_) {}, onError: (Object _) {}));
     }
+  }
+
+  /// 写一条播报命令（编号文件 + 原子 rename，保序且不会被 stdin 吞掉）。
+  Future<void> _sendCommand(Map<String, dynamic> message) async {
+    final Directory? dir = _workDir;
+    if (dir == null) return;
+    _commandSeq++;
+    final String name =
+        'cmd-${_commandSeq.toString().padLeft(6, '0')}.json';
+    final File target = File('${dir.path}${Platform.pathSeparator}$name');
+    final File temp = File('${target.path}.tmp');
+    await temp.writeAsString(jsonEncode(message), flush: true);
+    await temp.rename(target.path);
   }
 
   @override
@@ -239,12 +273,7 @@ while ($true) {
     _ready = false;
     final Process? process = _process;
     _process = null;
-    try {
-      process?.stdin.writeln('QUIT');
-      await process?.stdin.flush();
-    } catch (_) {
-      // 进程可能已经没了。
-    }
+    await _sendCommand(<String, dynamic>{'cmd': 'quit'});
     await _stdoutSubscription?.cancel();
     await _stderrSubscription?.cancel();
     if (process != null) {

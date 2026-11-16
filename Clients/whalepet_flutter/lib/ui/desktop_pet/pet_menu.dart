@@ -53,6 +53,16 @@ class PetMenu extends StatelessWidget {
             onTap: onOpenSettings,
           ),
           _MenuItem(
+            icon: Icons.mic_none,
+            label: runtime.voiceEnabled ? '关闭语音唤醒' : '开启语音唤醒',
+            onTap: runtime.toggleVoice,
+          ),
+          _MenuItem(
+            icon: Icons.record_voice_over_outlined,
+            label: '点击说话（跳过唤醒）',
+            onTap: runtime.manualListen,
+          ),
+          _MenuItem(
             icon: Icons.bedtime_outlined,
             label: runtime.petState.name == 'sleep' ? '叫醒它' : '让它睡觉',
             onTap: runtime.toggleSleep,

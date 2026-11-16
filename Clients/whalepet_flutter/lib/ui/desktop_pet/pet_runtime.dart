@@ -19,6 +19,8 @@ import '../../core/storage/pet_save.dart';
 import '../../core/storage/pet_save_store.dart';
 import '../../core/voice/speech_output.dart';
 import '../../core/voice/speech_queue.dart';
+import '../../core/voice/voice_engine.dart';
+import '../../core/voice/voice_session_coordinator.dart';
 import 'pet_layout.dart';
 
 /// 当前展开的面板。
@@ -33,24 +35,56 @@ class ChatMessage {
   final DateTime at;
 }
 
-/// 桌宠的运行时：状态机、数值、窗口移动、Agent 通道、播报队列的唯一持有者。
+/// 桌宠运行时：宠物数值、窗口、网络与语音的唯一装配点。
 ///
-/// 边界（`docs/CROSS_PLATFORM.md` §7.1）：UI 只读状态 + 转发用户动作，
-/// 平台能力（窗口 / TTS / 网络）都通过适配层进来，便于替换与测试。
+/// 架构边界（§7.1）：回答、任务事件、播报队列全部由 [VoiceSessionCoordinator]
+/// 统一持有；本类只负责把它们翻译成 UI 状态，以及管理窗口/存档/连接生命周期。
 class PetRuntime extends ChangeNotifier {
   PetRuntime({
     required this.paths,
     required this.window,
     required this.speech,
+    required this.voiceEngine,
     Random? random,
   }) : _random = random ?? Random() {
     _behavior = PetBehavior(random: _random);
     _dialogue = Dialogue(random: _random);
+    coordinator = VoiceSessionCoordinator(
+      engine: voiceEngine,
+      speech: speech,
+      queue: SpeechQueue(),
+      config: const VoiceEngineConfig(),
+      speakEnabled: () => _settings.speakResponses && _speechAvailable,
+      sendCommand: ({
+        required String requestId,
+        required String text,
+        required String source,
+      }) async {
+        final WebSocketAgentGateway? gateway = _gateway;
+        if (gateway == null) throw StateError('还没连上服务端');
+        await gateway.sendCommand(
+          requestId: requestId,
+          text: text,
+          source: source,
+        );
+      },
+      cancelCommand: (String requestId) async {
+        final WebSocketAgentGateway? gateway = _gateway;
+        if (gateway == null) return;
+        await gateway.cancel(requestId);
+      },
+    );
+    _coordinatorSubscription = coordinator.events.listen(_onCoordinatorEvent);
+    _voiceStateSubscription = coordinator.states.listen((VoiceSessionState state) {
+      _voiceState = state;
+      notifyListeners();
+    });
   }
 
   final AppPaths paths;
   final DesktopWindowAdapter window;
   final SpeechOutputAdapter speech;
+  final VoiceEngineAdapter voiceEngine;
   final Random _random;
 
   static const int _tickMs = 33;
@@ -58,6 +92,9 @@ class PetRuntime extends ChangeNotifier {
 
   late final PetBehavior _behavior;
   late final Dialogue _dialogue;
+
+  /// 语音状态机（UI 只读它的状态与事件，不反向改状态）。
+  late final VoiceSessionCoordinator coordinator;
 
   SettingsStore? _settingsStore;
   PetSaveStore? _saveStore;
@@ -71,16 +108,15 @@ class PetRuntime extends ChangeNotifier {
   WebSocketAgentGateway? _gateway;
   StreamSubscription<AgentServerEvent>? _eventSubscription;
   StreamSubscription<AgentConnectionState>? _stateSubscription;
-  StreamSubscription<SpeechOutputEvent>? _speechSubscription;
+  StreamSubscription<CoordinatorEvent>? _coordinatorSubscription;
+  StreamSubscription<VoiceSessionState>? _voiceStateSubscription;
   AgentConnectionState _connectionState = AgentConnectionState.disconnected;
+  VoiceSessionState _voiceState = VoiceSessionState.disabled;
   String? _token;
   String _clientId = '';
 
-  final SpeechQueue _speechQueue = SpeechQueue();
   final List<ChatMessage> _chat = <ChatMessage>[];
   bool _speechAvailable = false;
-  bool _speaking = false;
-  String? _speakingId;
 
   PetState _petState = PetState.idle;
   double _transientRemaining = 0;
@@ -96,9 +132,7 @@ class PetRuntime extends ChangeNotifier {
 
   String? _bubbleText;
   String? _lastError;
-  String? _activeRequestId;
   bool _announcedConnection = false;
-  String _wakePhrase = '小鲸小鲸';
 
   PetPanel _panel = PetPanel.none;
   bool _menuOpen = false;
@@ -109,7 +143,12 @@ class PetRuntime extends ChangeNotifier {
   bool _disposed = false;
 
   Timer? _ticker;
-  WindowRect _bounds = const WindowRect(left: 0, top: 0, width: PetLayout.windowWidth, height: PetLayout.windowHeight);
+  WindowRect _bounds = const WindowRect(
+    left: 0,
+    top: 0,
+    width: PetLayout.windowWidth,
+    height: PetLayout.windowHeight,
+  );
   WorkArea _area = const WorkArea(left: 0, top: 0, width: 1920, height: 1080);
 
   // -- 只读状态（UI 读这些）--------------------------------------------------
@@ -124,9 +163,11 @@ class PetRuntime extends ChangeNotifier {
   bool get menuOpen => _menuOpen;
   bool get clickThrough => _clickThrough;
   bool get speechAvailable => _speechAvailable;
-  bool get speaking => _speaking;
+  bool get speaking => coordinator.isSpeaking;
   AgentConnectionState get connectionState => _connectionState;
-  String get wakePhrase => _wakePhrase;
+  String get wakePhrase => coordinator.config.wakePhrase;
+  VoiceSessionState get voiceState => _voiceState;
+  bool get voiceEnabled => _settings.voiceWakeEnabled;
 
   /// 本机客户端 id（设置面板里展示，便于服务端日志对照）。
   String get runtimeClientId => _clientId;
@@ -137,7 +178,6 @@ class PetRuntime extends ChangeNotifier {
   double get walkDirection => _walkDirection;
   bool get isConnected => _connectionState == AgentConnectionState.connected;
 
-  /// 连接状态的中文说明（显示在面板标题上）。
   String get connectionLabel {
     switch (_connectionState) {
       case AgentConnectionState.connected:
@@ -151,31 +191,65 @@ class PetRuntime extends ChangeNotifier {
     }
   }
 
+  /// 语音状态说明（设置面板/菜单里显示）。
+  String get voiceStateLabel {
+    switch (_voiceState) {
+      case VoiceSessionState.disabled:
+        return '语音关闭';
+      case VoiceSessionState.preparing:
+        return '语音启动中…';
+      case VoiceSessionState.waitingWake:
+        return '等待唤醒（${coordinator.config.wakePhrase}）';
+      case VoiceSessionState.listening:
+        return '正在聆听';
+      case VoiceSessionState.recognizing:
+        return '识别中';
+      case VoiceSessionState.thinking:
+        return '处理中';
+      case VoiceSessionState.speaking:
+        return '播报中';
+      case VoiceSessionState.error:
+        return '语音不可用';
+    }
+  }
+
   // -- 生命周期 -------------------------------------------------------------
 
-  /// 快速启动：读配置 → 读存档 → 建窗口。**必须先跑完再 runApp**，
-  /// 这样第一帧出来窗口就已经是宠物尺寸，不会先闪一个大白窗。
+  /// 快速启动：读配置 → 读存档 → 建窗口。必须先跑完再 runApp。
   Future<void> start() async {
     if (_started) return;
     _started = true;
     await paths.ensureCreated();
     _settingsStore = SettingsStore(file: paths.settingsFile);
     _settings = await _settingsStore!.load();
+    coordinator.setConfig(_voiceConfigFromSettings(_settings, revision: 1));
     await _loadPet();
     await _loadIdentity();
     await _initWindow();
     notifyListeners();
   }
 
-  /// 慢启动：拉起播报引擎、连 DSH、开帧循环。可以 runApp 之后再 await。
+  /// 慢启动：播报引擎 → 连接 → 语音 → 帧循环。runApp 之后再跑。
   Future<void> startServices() async {
     if (_servicesStarted) return;
     _servicesStarted = true;
     await _initSpeech();
     await _connectIfConfigured();
+    if (_settings.voiceWakeEnabled) {
+      await coordinator.enable();
+    }
     _ticker = Timer.periodic(const Duration(milliseconds: _tickMs), (_) => _onTick());
     notifyListeners();
   }
+
+  VoiceEngineConfig _voiceConfigFromSettings(AppSettings settings,
+          {required int revision}) =>
+      VoiceEngineConfig(
+        wakePhrase: settings.wakePhrase,
+        wakeAliases: settings.wakeAliases,
+        wakeAck: settings.wakeAck,
+        revision: revision,
+      );
 
   Future<void> _loadPet() async {
     _saveStore = PetSaveStore(directory: paths.saveDirectory);
@@ -185,8 +259,9 @@ class PetRuntime extends ChangeNotifier {
     _totalFeeds = save.totalFeeds;
     _totalPets = save.totalPets;
     _bornAtUtc = save.bornAtUtc;
-    final Duration offline = DateTime.now().toUtc().difference(save.lastTickUtc);
-    _vitals.settleOffline(offline);
+    _vitals.settleOffline(
+      DateTime.now().toUtc().difference(save.lastTickUtc),
+    );
   }
 
   Future<void> _loadIdentity() async {
@@ -218,12 +293,10 @@ class PetRuntime extends ChangeNotifier {
     final double defaultLeft =
         _area.left + (_area.width - PetLayout.windowWidth) / 2;
     final double defaultTop = _area.bottom - PetLayout.windowHeight - 8;
-    final double left = _settings.windowX ?? defaultLeft;
-    final double top = _settings.windowY ?? defaultTop;
     return clampToWorkArea(
       WindowRect(
-        left: left,
-        top: top,
+        left: _settings.windowX ?? defaultLeft,
+        top: _settings.windowY ?? defaultTop,
         width: PetLayout.windowWidth,
         height: PetLayout.windowHeight,
       ),
@@ -236,7 +309,6 @@ class PetRuntime extends ChangeNotifier {
     try {
       await speech.initialize();
       _speechAvailable = true;
-      _speechSubscription = speech.events.listen(_onSpeechEvent);
     } catch (error) {
       _speechAvailable = false;
       _lastError = '系统播报不可用（只上屏不朗读）：$error';
@@ -273,11 +345,44 @@ class PetRuntime extends ChangeNotifier {
     _ticker?.cancel();
     unawaited(_eventSubscription?.cancel());
     unawaited(_stateSubscription?.cancel());
-    unawaited(_speechSubscription?.cancel());
+    unawaited(_coordinatorSubscription?.cancel());
+    unawaited(_voiceStateSubscription?.cancel());
+    unawaited(coordinator.dispose());
     unawaited(_gateway?.dispose());
     unawaited(speech.dispose());
     unawaited(window.dispose());
     super.dispose();
+  }
+
+  // -- 协调器 → UI ----------------------------------------------------------
+
+  void _onCoordinatorEvent(CoordinatorEvent event) {
+    if (_disposed) return;
+    switch (event) {
+      case CoordinatorBubbleEvent():
+        _say(event.text, seconds: event.seconds);
+      case CoordinatorTranscriptEvent():
+        if (event.text.isEmpty) {
+          if (_bubbleText != null && _bubbleText!.startsWith('听到：')) {
+            _bubbleText = null;
+          }
+        } else {
+          _say('听到：${event.text}', seconds: 2);
+        }
+      case CoordinatorChatEvent():
+        _chat.add(ChatMessage(
+          fromUser: event.fromUser,
+          text: event.text,
+          at: DateTime.now(),
+        ));
+      case CoordinatorPetStateEvent():
+        _transientRemaining = 0;
+        _setState(event.state);
+      case CoordinatorErrorEvent():
+        _lastError = event.message;
+        _say(event.message, seconds: 8);
+    }
+    notifyListeners();
   }
 
   // -- 帧循环 ---------------------------------------------------------------
@@ -320,8 +425,8 @@ class PetRuntime extends ChangeNotifier {
 
   void _moveTick(double dt) {
     if (_petState == PetState.walk) {
-      final double nextLeft = _bounds.left + _walkDirection * _walkSpeed * dt;
-      final WindowRect next = _bounds.copyWith(left: nextLeft);
+      final WindowRect next =
+          _bounds.copyWith(left: _bounds.left + _walkDirection * _walkSpeed * dt);
       final WindowRect clamped = clampToWorkArea(next, _area, minVisible: 0);
       if (clamped.left != next.left) _walkDirection = -_walkDirection;
       if (clamped.left != _bounds.left) {
@@ -330,9 +435,8 @@ class PetRuntime extends ChangeNotifier {
       }
     } else if (_petState == PetState.swim) {
       _swimPhase += dt;
-      final double top = _swimBaseTop + sin(_swimPhase * 1.1) * 10;
       final WindowRect clamped = clampToWorkArea(
-        _bounds.copyWith(top: top),
+        _bounds.copyWith(top: _swimBaseTop + sin(_swimPhase * 1.1) * 10),
         _area,
         minVisible: 0,
       );
@@ -352,10 +456,8 @@ class PetRuntime extends ChangeNotifier {
       isBusy: false,
     );
     if (next == _petState) return;
-    // 精力够就不睡：睡觉是数值驱动，不是随机行为。
     if (next == PetState.sleep && _vitals.energy > 55) return;
     if (_petState == PetState.sleep && next != PetState.sleep) {
-      // 睡醒先回待机。
       _setState(PetState.idle);
       return;
     }
@@ -384,20 +486,17 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  // -- 鼠标穿透（透明区域不吃点击）-------------------------------------------
+  // -- 鼠标穿透 -------------------------------------------------------------
 
   Future<void> _updateClickThrough() async {
     if (!_windowReady) return;
     final ({double x, double y})? cursor = window.cursorPosition();
     if (cursor == null) return;
-    // 窗口可能被用户拖动过：每次都以系统真实位置为准。
     _bounds = await window.bounds();
     final Offset local = Offset(cursor.x - _bounds.left, cursor.y - _bounds.top);
-    final bool overPet = PetLayout.petRect.contains(local);
-    final bool overPanel =
-        _panel != PetPanel.none && PetLayout.panelRect.contains(local);
-    final bool overMenu = _menuOpen && PetLayout.menuRect.contains(local);
-    final bool interactive = overPet || overPanel || overMenu;
+    final bool interactive = PetLayout.petRect.contains(local) ||
+        (_panel != PetPanel.none && PetLayout.panelRect.contains(local)) ||
+        (_menuOpen && PetLayout.menuRect.contains(local));
     final bool want = !interactive;
     if (want == _clickThrough) return;
     _clickThrough = want;
@@ -406,7 +505,6 @@ class PetRuntime extends ChangeNotifier {
 
   // -- 互动 ----------------------------------------------------------------
 
-  /// 摸头。
   void petHead() {
     if (_petState == PetState.sleep) {
       _say('zzZ……（睡梦里被摸了摸头）', seconds: 4);
@@ -424,7 +522,6 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 投喂。
   void feed() {
     if (_petState == PetState.sleep) {
       _say('睡着啦，等会儿再喂嘛……', seconds: 4);
@@ -445,7 +542,6 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 玩耍。
   void play() {
     if (_petState == PetState.sleep) {
       _say('睡着啦，醒了再玩～', seconds: 4);
@@ -466,7 +562,6 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 让宠物去睡觉 / 叫醒。
   void toggleSleep() {
     if (_petState == PetState.sleep) {
       _setState(PetState.idle);
@@ -477,7 +572,6 @@ class PetRuntime extends ChangeNotifier {
     }
   }
 
-  /// 拖动开始（由 UI 在 panStart 时调用）。
   Future<void> beginDrag() async {
     _dragging = true;
     _transientRemaining = 0;
@@ -485,12 +579,10 @@ class PetRuntime extends ChangeNotifier {
     await window.startNativeDrag();
   }
 
-  /// 拖动结束。
   Future<void> endDrag() async {
     _dragging = false;
     _transientRemaining = 1.0;
-    _bounds = await window.bounds();
-    _bounds = clampToWorkArea(_bounds, _area, minVisible: 0);
+    _bounds = clampToWorkArea(await window.bounds(), _area, minVisible: 0);
     await window.setPosition(_bounds.left, _bounds.top);
     notifyListeners();
   }
@@ -528,42 +620,49 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  // -- 命令 ----------------------------------------------------------------
+  // -- 文本 / 语音命令 ------------------------------------------------------
 
-  /// 发送一条文本命令（聊天面板 / 快捷键都走这里）。
-  Future<void> sendText(String raw) async {
-    final String? text = normalizeCommandText(raw);
-    if (text == null) return;
-    // 先把用户的话留在历史里：离线时也不能让它凭空消失。
-    _chat.add(ChatMessage(fromUser: true, text: text, at: DateTime.now()));
-    notifyListeners();
-    final WebSocketAgentGateway? gateway = _gateway;
-    if (gateway == null || _connectionState != AgentConnectionState.connected) {
-      _say('还没连上 DSH：右键 → 设置，填服务器地址和令牌', seconds: 6);
-      return;
-    }
-    final String requestId = newRequestId(random: _random);
-    _activeRequestId = requestId;
-    _setState(PetState.thinking);
-    _say('收到，我这就去办～', seconds: 3);
-    notifyListeners();
-    try {
-      await gateway.sendCommand(requestId: requestId, text: text);
-    } catch (error) {
-      _activeRequestId = null;
-      _setState(PetState.idle);
-      _say('发送失败：$error', seconds: 6);
-    }
-  }
+  Future<void> sendText(String raw) => coordinator.submitText(raw);
 
   void clearChat() {
     _chat.clear();
     notifyListeners();
   }
 
-  /// 保存设置并（必要时）重连。
+  /// 打开/关闭语音唤醒。
+  Future<void> toggleVoice() async {
+    final bool next = !_settings.voiceWakeEnabled;
+    final AppSettings updated = _settings.copyWith(voiceWakeEnabled: next);
+    _settings = updated;
+    await _settingsStore?.save(updated);
+    if (next) {
+      await coordinator.enable();
+    } else {
+      await coordinator.disable();
+    }
+    notifyListeners();
+  }
+
+  /// 手动点击说话（跳过唤醒词）。
+  Future<void> manualListen() async {
+    closeMenu();
+    closePanel();
+    await coordinator.manualListen();
+  }
+
+  /// 取消当前这一轮。
+  Future<void> cancelVoice() async {
+    closeMenu();
+    await coordinator.cancel();
+  }
+
+  /// 保存设置并（必要时）重连 / 重建唤醒语法。
   Future<void> applySettings(AppSettings next, {String? token}) async {
-    final bool serverChanged = next.serverUrl.trim() != _settings.serverUrl.trim();
+    final bool serverChanged =
+        next.serverUrl.trim() != _settings.serverUrl.trim();
+    final bool voiceChanged = next.wakePhrase != _settings.wakePhrase ||
+        next.wakeAck != _settings.wakeAck ||
+        next.wakeAliases.join('|') != _settings.wakeAliases.join('|');
     _settings = next;
     await _settingsStore?.save(_settings);
     await window.setAlwaysOnTop(next.alwaysOnTop);
@@ -572,8 +671,18 @@ class PetRuntime extends ChangeNotifier {
       final String trimmed = token.trim();
       _token = trimmed.isEmpty ? null : trimmed;
     }
-    final bool tokenChanged = token != null;
-    if (serverChanged || tokenChanged) {
+    if (voiceChanged) {
+      coordinator.setConfig(_voiceConfigFromSettings(
+        next,
+        revision: coordinator.config.revision + 1,
+      ));
+    }
+    if (next.voiceWakeEnabled && !coordinator.enabled) {
+      await coordinator.enable();
+    } else if (!next.voiceWakeEnabled && coordinator.enabled) {
+      await coordinator.disable();
+    }
+    if (serverChanged || token != null) {
       await _restartGateway();
     }
     notifyListeners();
@@ -591,61 +700,7 @@ class PetRuntime extends ChangeNotifier {
     await _connectIfConfigured();
   }
 
-  /// 手动重连。
-  Future<void> reconnect() async {
-    await _restartGateway();
-  }
-
-  // -- 播报 ----------------------------------------------------------------
-
-  void _onSpeechEvent(SpeechOutputEvent event) {
-    if (event.kind == SpeechOutputEventKind.started) {
-      if (_speaking && event.utteranceId == _speakingId) {
-        _setState(PetState.speaking);
-      }
-      return;
-    }
-    if (event.kind == SpeechOutputEventKind.failed) {
-      _lastError = '播报失败：${event.message ?? '未知原因'}';
-      notifyListeners();
-    }
-  }
-
-  void _enqueueSpeech(
-    String id, {
-    required String text,
-    required SpeechPriority priority,
-    String? requestId,
-  }) {
-    if (!_settings.speakResponses || !_speechAvailable) return;
-    final bool added = _speechQueue.enqueue(
-      SpeechItem(id: id, text: text, priority: priority, requestId: requestId),
-    );
-    if (added) _pumpSpeech();
-  }
-
-  void _pumpSpeech() {
-    if (_speaking || !_speechAvailable || !_settings.speakResponses) return;
-    final SpeechItem? item = _speechQueue.take();
-    if (item == null) return;
-    _speaking = true;
-    _speakingId = item.id;
-    _setState(PetState.speaking);
-    unawaited(
-      speech.speak(item.id, item.text).then<void>((_) {}).catchError((Object error) {
-        _lastError = '播报失败：$error';
-      }).whenComplete(() {
-        _speaking = false;
-        _speakingId = null;
-        if (_speechQueue.isEmpty) {
-          _setState(_activeRequestId != null ? PetState.thinking : PetState.idle);
-        } else {
-          _pumpSpeech();
-        }
-        notifyListeners();
-      }),
-    );
-  }
+  Future<void> reconnect() => _restartGateway();
 
   // -- Agent 事件 ----------------------------------------------------------
 
@@ -658,102 +713,13 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 服务端事件一律转给协调器；本类只额外处理「连上了」的一次性提示。
   void _onAgentEvent(AgentServerEvent event) {
-    switch (event) {
-      case AgentReadyEvent():
-        _setConnectionState(AgentConnectionState.connected);
-        if (!_announcedConnection) {
-          _announcedConnection = true;
-          _say('连上 DSH 啦，双击我说话～', seconds: 5);
-        }
-      case AgentTaskEvent():
-        _handleTaskEvent(event);
-      case AgentResponseEvent():
-        _handleResponseEvent(event);
-      case AgentAnnouncementEvent():
-        _handleAnnouncement(event);
-      case AgentErrorEvent():
-        _say(event.message.isEmpty ? '出错了' : event.message, seconds: 8);
-        if (event.requestId != null && event.requestId == _activeRequestId) {
-          _activeRequestId = null;
-          if (!_speaking) _setState(PetState.idle);
-        }
-      case AgentVoiceConfigEvent():
-        if (event.wakePhrase.isNotEmpty) _wakePhrase = event.wakePhrase;
-      case AgentUnknownServerEvent():
-        break;
+    coordinator.onAgentEvent(event);
+    if (event is AgentReadyEvent && !_announcedConnection) {
+      _announcedConnection = true;
+      _say('连上 DSH 啦，双击我说话～', seconds: 5);
     }
-    notifyListeners();
-  }
-
-  void _handleTaskEvent(AgentTaskEvent event) {
-    final String id = event.eventId ?? 'task-${event.requestId}-${event.state}';
-    switch (event.state) {
-      case 'queued':
-      case 'started':
-        if (_activeRequestId == event.requestId) _setState(PetState.thinking);
-        if (event.text != null) _say(event.text!, seconds: 4);
-      case 'approval':
-        _say(event.text ?? '需要你确认一下', seconds: 12);
-        _enqueueSpeech(
-          id,
-          text: event.text ?? '需要你确认一下',
-          priority: SpeechPriority.completion,
-          requestId: event.requestId,
-        );
-      case 'finished':
-        if (_activeRequestId == event.requestId) _activeRequestId = null;
-        if (!_speaking && _petState == PetState.thinking) _setState(PetState.idle);
-        // 正式回答已经念过时，队列会按 requestId 丢掉这句「做完了」。
-        _enqueueSpeech(
-          id,
-          text: event.text ?? '做完了',
-          priority: SpeechPriority.completion,
-          requestId: event.requestId,
-        );
-      case 'failed':
-      case 'interrupted':
-        if (event.text != null) _say(event.text!, seconds: 6);
-        if (_activeRequestId == event.requestId) _activeRequestId = null;
-        if (!_speaking && _petState == PetState.thinking) _setState(PetState.idle);
-      default:
-        if (event.text != null) _say(event.text!, seconds: 4);
-    }
-  }
-
-  void _handleResponseEvent(AgentResponseEvent event) {
-    final String speechText = event.speechText.trim().isNotEmpty
-        ? event.speechText.trim()
-        : event.displayText.trim();
-    if (event.displayText.trim().isNotEmpty) {
-      _chat.add(ChatMessage(
-        fromUser: false,
-        text: event.displayText.trim(),
-        at: DateTime.now(),
-      ));
-    }
-    if (speechText.isNotEmpty) _say(speechText, seconds: 14);
-    if (_activeRequestId == event.requestId) _activeRequestId = null;
-    _enqueueSpeech(
-      event.eventId ?? 'resp-${event.requestId}',
-      text: speechText,
-      priority: SpeechPriority.response,
-      requestId: event.requestId,
-    );
-  }
-
-  void _handleAnnouncement(AgentAnnouncementEvent event) {
-    if (!_settings.subscriptionsAnnouncements) return;
-    final String text = event.speechText.trim().isNotEmpty
-        ? event.speechText.trim()
-        : event.displayText.trim();
-    if (text.isEmpty) return;
-    _say(text, seconds: 10);
-    _enqueueSpeech(
-      event.eventId ?? 'ann-${DateTime.now().microsecondsSinceEpoch}',
-      text: text,
-      priority: SpeechPriority.announcement,
-    );
   }
 
   // -- 持久化 --------------------------------------------------------------
@@ -766,21 +732,19 @@ class PetRuntime extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 立即落盘（15 秒节流之外：退出、切面板、休眠前调用）。
   Future<void> persistNow() async {
     final PetSaveStore? store = _saveStore;
     if (store == null) return;
-    final PetSave save = PetSave(
-      vitals: _vitals,
-      lastTickUtc: DateTime.now().toUtc(),
-      petName: _petName,
-      totalFeeds: _totalFeeds,
-      totalPets: _totalPets,
-      bornAtUtc: _bornAtUtc,
-    );
     try {
-      await store.save(save);
-        await _settingsStore?.save(_settings.copyWith(
+      await store.save(PetSave(
+        vitals: _vitals,
+        lastTickUtc: DateTime.now().toUtc(),
+        petName: _petName,
+        totalFeeds: _totalFeeds,
+        totalPets: _totalPets,
+        bornAtUtc: _bornAtUtc,
+      ));
+      await _settingsStore?.save(_settings.copyWith(
         windowX: _bounds.left,
         windowY: _bounds.top,
       ));

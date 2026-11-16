@@ -30,5 +30,5 @@ class PetLayout {
   static const Rect panelRect = Rect.fromLTWH(12, 8, windowWidth - 24, 332);
 
   /// 右键菜单区域。
-  static const Rect menuRect = Rect.fromLTWH(24, 92, 210, 246);
+  static const Rect menuRect = Rect.fromLTWH(24, 56, 210, 282);
 }

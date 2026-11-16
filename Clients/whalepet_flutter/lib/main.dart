@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'core/config/app_paths.dart';
 import 'core/platform/desktop_window.dart';
 import 'core/voice/speech_output.dart';
+import 'core/voice/voice_engine.dart';
 import 'platform/desktop_window/win32_window.dart';
 import 'platform/speech_output/powershell_speech.dart';
+import 'platform/voice/sapi_voice_engine.dart';
 import 'ui/desktop_pet/app.dart';
 import 'ui/desktop_pet/pet_runtime.dart';
 
@@ -29,10 +31,18 @@ Future<void> main() async {
       ? PowerShellSpeechOutput()
       : const NoopSpeechOutput();
 
+  // 开发验证钩子：设置环境变量 WHALEPET_VOICE_WAV 指向一段 WAV，
+  // 引擎就用 SetInputToWaveFile 代替麦克风，可在无麦克风的机器上跑通全链路。
+  final String? voiceWav = Platform.environment['WHALEPET_VOICE_WAV'];
+  final VoiceEngineAdapter voiceEngine = Platform.isWindows
+      ? SapiVoiceEngine(audioFile: voiceWav)
+      : const NoopVoiceEngine();
+
   final PetRuntime runtime = PetRuntime(
     paths: paths,
     window: window,
     speech: speech,
+    voiceEngine: voiceEngine,
   );
   // 先准备好配置/存档/窗口，再画第一帧；耗时的 TTS 与网络连接放到 runApp 之后。
   await runtime.start();

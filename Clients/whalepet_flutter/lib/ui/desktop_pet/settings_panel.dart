@@ -26,6 +26,10 @@ class SettingsPanel extends StatefulWidget {
 class _SettingsPanelState extends State<SettingsPanel> {
   late final TextEditingController _serverController;
   final TextEditingController _tokenController = TextEditingController();
+  late final TextEditingController _wakePhraseController;
+  late final TextEditingController _wakeAliasController;
+  late final TextEditingController _wakeAckController;
+  late bool _voiceWake;
   late bool _announcements;
   late bool _speak;
   late bool _alwaysOnTop;
@@ -38,6 +42,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
     super.initState();
     final AppSettings settings = widget.runtime.settings;
     _serverController = TextEditingController(text: settings.serverUrl);
+    _wakePhraseController = TextEditingController(text: settings.wakePhrase);
+    _wakeAliasController =
+        TextEditingController(text: settings.wakeAliases.join('，'));
+    _wakeAckController = TextEditingController(text: settings.wakeAck);
+    _voiceWake = settings.voiceWakeEnabled;
     _announcements = settings.subscriptionsAnnouncements;
     _speak = settings.speakResponses;
     _alwaysOnTop = settings.alwaysOnTop;
@@ -48,6 +57,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
   void dispose() {
     _serverController.dispose();
     _tokenController.dispose();
+    _wakePhraseController.dispose();
+    _wakeAliasController.dispose();
+    _wakeAckController.dispose();
     super.dispose();
   }
 
@@ -62,6 +74,16 @@ class _SettingsPanelState extends State<SettingsPanel> {
       speakResponses: _speak,
       alwaysOnTop: _alwaysOnTop,
       clickThroughWhereTransparent: _clickThrough,
+      voiceWakeEnabled: _voiceWake,
+      wakePhrase: _wakePhraseController.text.trim().isEmpty
+          ? '小鲸小鲸'
+          : _wakePhraseController.text.trim(),
+      wakeAliases: _wakeAliasController.text
+          .split(RegExp(r'[,，;；\s]+'))
+          .map((String value) => value.trim())
+          .where((String value) => value.isNotEmpty)
+          .toList(growable: false),
+      wakeAck: _wakeAckController.text.trim(),
     );
     final String token = _tokenController.text.trim();
     await widget.runtime.applySettings(next, token: token.isEmpty ? null : token);
@@ -135,6 +157,21 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     onChanged: (bool value) =>
                         setState(() => _announcements = value),
                   ),
+                  const SizedBox(height: 8),
+                  const Text('本地语音（离线 KWS + 听写）', style: kPanelLabelStyle),
+                  _SwitchRow(
+                    label: '开启唤醒词常驻侦听',
+                    value: _voiceWake,
+                    onChanged: (bool value) => setState(() => _voiceWake = value),
+                  ),
+                  const Text('唤醒词 / 别名（逗号分隔）/ 应答', style: kPanelLabelStyle),
+                  const SizedBox(height: 4),
+                  _Field(controller: _wakePhraseController, hint: '小鲸小鲸'),
+                  const SizedBox(height: 5),
+                  _Field(controller: _wakeAliasController, hint: '小金小金，小京小京'),
+                  const SizedBox(height: 5),
+                  _Field(controller: _wakeAckController, hint: '我在（留空则不播应答）'),
+                  const SizedBox(height: 6),
                   _SwitchRow(
                     label: '窗口置顶',
                     value: _alwaysOnTop,
@@ -154,6 +191,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                   Text(
                     '状态：${runtime.connectionLabel}'
                     '${runtime.speechAvailable ? ' · 播报就绪' : ' · 播报不可用'}',
+                    style: kPanelLabelStyle,
+                  ),
+                  Text(
+                    '语音：${runtime.voiceStateLabel}',
                     style: kPanelLabelStyle,
                   ),
                   if (runtime.lastError != null) ...<Widget>[

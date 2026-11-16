@@ -2,6 +2,7 @@
 ///
 /// 与宠物状态机的唯一接口：语音状态由 `VoiceSessionCoordinator` 驱动，
 /// 播报层只负责「开口 / 说完 / 出错」，不决定宠物进入什么状态。
+library;
 
 /// 播报事件类型。
 enum SpeechOutputEventKind { started, finished, failed }

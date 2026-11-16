@@ -74,6 +74,14 @@ class _ChatPanelState extends State<ChatPanel> {
                 ),
                 _StatusDot(label: widget.runtime.connectionLabel, ok: connected),
                 IconButton(
+                  tooltip: '点击说话',
+                  iconSize: 18,
+                  visualDensity: VisualDensity.compact,
+                  color: const Color(0xFF9FD8F0),
+                  onPressed: widget.runtime.manualListen,
+                  icon: const Icon(Icons.mic_none),
+                ),
+                IconButton(
                   tooltip: '设置',
                   iconSize: 18,
                   visualDensity: VisualDensity.compact,

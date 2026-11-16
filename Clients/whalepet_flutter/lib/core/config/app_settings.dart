@@ -17,6 +17,10 @@ class AppSettings {
     this.windowX,
     this.windowY,
     this.chatPanelOpen = false,
+    this.voiceWakeEnabled = false,
+    this.wakePhrase = '小鲸小鲸',
+    this.wakeAliases = const <String>['小金小金'],
+    this.wakeAck = '我在',
   });
 
   /// 设置文件格式版本。
@@ -44,6 +48,14 @@ class AppSettings {
   /// 上次退出时聊天面板是否是打开的。
   final bool chatPanelOpen;
 
+  /// 是否开启本地 KWS 常驻唤醒（默认关，接上麦克风再开）。
+  final bool voiceWakeEnabled;
+
+  /// 唤醒词、别名与应答（会写进 KWS 语法，§11.3）。
+  final String wakePhrase;
+  final List<String> wakeAliases;
+  final String wakeAck;
+
   /// 服务地址解析结果；空或非法返回 null。
   Uri? get parsedServerUri {
     final String raw = serverUrl.trim();
@@ -66,6 +78,10 @@ class AppSettings {
     double? windowX,
     double? windowY,
     bool? chatPanelOpen,
+    bool? voiceWakeEnabled,
+    String? wakePhrase,
+    List<String>? wakeAliases,
+    String? wakeAck,
   }) {
     return AppSettings(
       serverUrl: serverUrl ?? this.serverUrl,
@@ -78,6 +94,10 @@ class AppSettings {
       windowX: windowX ?? this.windowX,
       windowY: windowY ?? this.windowY,
       chatPanelOpen: chatPanelOpen ?? this.chatPanelOpen,
+      voiceWakeEnabled: voiceWakeEnabled ?? this.voiceWakeEnabled,
+      wakePhrase: wakePhrase ?? this.wakePhrase,
+      wakeAliases: wakeAliases ?? this.wakeAliases,
+      wakeAck: wakeAck ?? this.wakeAck,
     );
   }
 
@@ -91,6 +111,10 @@ class AppSettings {
         'window_x': windowX,
         'window_y': windowY,
         'chat_panel_open': chatPanelOpen,
+        'voice_wake_enabled': voiceWakeEnabled,
+        'wake_phrase': wakePhrase,
+        'wake_aliases': wakeAliases,
+        'wake_ack': wakeAck,
       };
 
   static AppSettings fromJson(Map<String, dynamic> json) {
@@ -110,6 +134,10 @@ class AppSettings {
       windowX: _double(json['window_x']),
       windowY: _double(json['window_y']),
       chatPanelOpen: _bool(json['chat_panel_open'], false),
+      voiceWakeEnabled: _bool(json['voice_wake_enabled'], false),
+      wakePhrase: _string(json['wake_phrase']) ?? '小鲸小鲸',
+      wakeAliases: _stringList(json['wake_aliases'], const <String>['小金小金']),
+      wakeAck: _string(json['wake_ack']) ?? '我在',
     );
   }
 
@@ -120,6 +148,11 @@ class AppSettings {
 
   static double? _double(Object? value) =>
       value is num ? value.toDouble() : null;
+
+  static List<String> _stringList(Object? value, List<String> fallback) {
+    if (value is! List) return fallback;
+    return value.whereType<String>().toList(growable: false);
+  }
 }
 
 /// 设置的读写：文件不存在 / 损坏都回落到默认值（不让客户端起不来）。
