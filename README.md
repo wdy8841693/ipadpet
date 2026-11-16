@@ -139,8 +139,8 @@ Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）�
 ```bash
 cd Clients/whalepet_flutter
 export ANDROID_HOME=<Android SDK>
-bash tool/build_android.sh      # → dist/whalepet-android-0.3.0-release.apk
-adb install -r dist/whalepet-android-0.3.0-release.apk
+bash tool/build_android.sh      # → dist/whalepet-android-<版本>-release.apk（版本取自 pubspec）
+adb install -r dist/whalepet-android-*-release.apk
 ```
 
 需要 Flutter 3.50 + Android SDK platform 36 / build-tools 36 + JDK 17。
