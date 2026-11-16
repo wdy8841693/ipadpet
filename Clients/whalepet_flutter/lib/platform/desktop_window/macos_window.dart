@@ -17,7 +17,8 @@ import '../../core/platform/window_placement.dart';
 ///   - 唯一用 FFI 的地方是全局光标：CoreGraphics 的光标坐标恰好就是
 ///     「左上角原点」的全局坐标，与 Dart 语义直接对齐，而且接口是同步的
 ///     （`cursorPosition()` 在 `DesktopWindowAdapter` 里是同步方法，不能走 channel）。
-class MacOSDesktopWindow implements DesktopWindowAdapter, DisplayChangeAware {
+class MacOSDesktopWindow
+    implements DesktopWindowAdapter, DisplayChangeAware, WindowVisibilityAware {
   MacOSDesktopWindow() {
     // 原生侧在「显示器参数变化」时会回调这个通道，桌宠据此重新约束位置。
     _channel.setMethodCallHandler(_onNativeCall);
@@ -29,9 +30,13 @@ class MacOSDesktopWindow implements DesktopWindowAdapter, DisplayChangeAware {
       StreamController<void>.broadcast();
 
   bool _ready = false;
+  bool _visible = true;
 
   @override
   Stream<void> get displayChanges => _displayChanges.stream;
+
+  @override
+  bool get isVisible => _visible;
 
   Future<void> _onNativeCall(MethodCall call) async {
     if (call.method == 'screensChanged') {
@@ -142,6 +147,16 @@ class MacOSDesktopWindow implements DesktopWindowAdapter, DisplayChangeAware {
         'setClickThrough',
         <String, bool>{'enabled': enabled},
       );
+
+  /// 显示/隐藏窗口（托盘/菜单栏「显示宠物」）。
+  @override
+  Future<void> setVisible(bool visible) async {
+    await _channel.invokeMethod<dynamic>(
+      'setVisible',
+      <String, bool>{'visible': visible},
+    );
+    _visible = visible;
+  }
 
   @override
   Future<void> startNativeDrag() => _channel.invokeMethod<dynamic>(

@@ -15,11 +15,39 @@ void main() {
     test('命中唤醒词 → 唤醒事件', () {
       final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
       final List<VoiceEngineEvent> events =
-          r.route(const RawPartialEvent(text: '小鲸小鲸'));
+          r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 0.9));
       expect(events.length, 1);
       final VoiceEngineEvent event = events.first;
       expect(event, isA<VoiceWakeDetectedEvent>());
       expect((event as VoiceWakeDetectedEvent).keyword, '小鲸小鲸');
+    });
+
+    test('partial 不触发唤醒：等句尾判停才知道后面有没有指令（§7.7.4）', () {
+      // 用 partial 唤醒会把后半句截断：「小鲸小鲸帮我查天气」在 partial
+      // 阶段只看到「小鲸小鲸」，指令就丢了。
+      final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
+      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).isEmpty, isTrue);
+      expect(
+          r.route(const RawPartialEvent(text: '小鲸小鲸帮我查')).isEmpty, isTrue);
+    });
+
+    test('一句话带命令：唤醒事件带上后面那一截', () {
+      final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
+      final List<VoiceEngineEvent> events = r.route(
+        const RawFinalEvent(text: '小鲸小鲸，帮我查一下明天的安排', confidence: 0.9),
+      );
+      expect(events.length, 1);
+      final VoiceWakeDetectedEvent wake = events.first as VoiceWakeDetectedEvent;
+      expect(wake.keyword, '小鲸小鲸');
+      expect(wake.trailingText, '帮我查一下明天的安排');
+    });
+
+    test('只说唤醒词时后面为空', () {
+      final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
+      final List<VoiceEngineEvent> events =
+          r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 0.9));
+      expect(
+          (events.first as VoiceWakeDetectedEvent).trailingText, isEmpty);
     });
 
     test('别名同样能唤醒', () {
@@ -42,19 +70,24 @@ void main() {
 
     test('唤醒后本轮不再产生事件（避免应答播报期间重复触发）', () {
       final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
-      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).length, 1);
-      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).isEmpty, isTrue);
+      expect(r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 1)).length,
+          1);
       expect(
           r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 1)).isEmpty,
+          isTrue);
+      expect(
+          r.route(const RawPartialEvent(text: '小鲸小鲸')).isEmpty,
           isTrue);
     });
 
     test('重新进入待机模式会清掉已唤醒标记', () {
       final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
-      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).length, 1);
+      expect(r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 1)).length,
+          1);
       r.setMode(VoiceEngineMode.idle);
       r.setMode(VoiceEngineMode.wake);
-      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).length, 1);
+      expect(r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 1)).length,
+          1);
     });
 
     test('「没听清」是常态，不上报错误', () {
@@ -166,12 +199,17 @@ void main() {
   group('唤醒词表', () {
     test('换词后按新词表判定', () {
       final VoiceEventRouter r = router(mode: VoiceEngineMode.wake);
-      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).length, 1);
+      expect(r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 1)).length,
+          1);
       r.setMode(VoiceEngineMode.idle);
       r.setWakePhrases(const <String>['鲸鱼鲸鱼']);
       r.setMode(VoiceEngineMode.wake);
-      expect(r.route(const RawPartialEvent(text: '小鲸小鲸')).isEmpty, isTrue);
-      expect(r.route(const RawPartialEvent(text: '鲸鱼鲸鱼')).length, 1);
+      expect(
+          r.route(const RawFinalEvent(text: '小鲸小鲸', confidence: 1)).isEmpty,
+          isTrue);
+      expect(
+          r.route(const RawFinalEvent(text: '鲸鱼鲸鱼', confidence: 1)).length,
+          1);
     });
   });
 }

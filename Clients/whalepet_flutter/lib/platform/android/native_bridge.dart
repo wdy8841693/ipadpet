@@ -79,5 +79,11 @@ class NativeBridge {
   static Future<void> asrStart({required bool wakeMode}) => _methods
       .invokeMethod<void>('asrStart', <String, Object?>{'wakeMode': wakeMode});
 
-  static Future<void> asrStop() => _methods.invokeMethod<void>('asrStop');
+  /// 停止采集。
+  ///
+  /// [force] = true 表示**用户明确停止**（关语音 / 退后台 / 释放）：原生侧会
+  /// 释放音频焦点并停掉来电轮询。打断期间的自动停采集不要传 true，否则
+  /// 恢复监听会被一起清掉，来电结束后再也收不到恢复事件（§10.1）。
+  static Future<void> asrStop({bool force = false}) =>
+      _methods.invokeMethod<void>('asrStop', <String, Object?>{'force': force});
 }

@@ -55,6 +55,9 @@ abstract interface class PetViewModel implements Listenable {
 
   bool get voiceEnabled;
 
+  /// 平台是否支持「开机自动启动」；不支持时设置面板不显示这一项。
+  bool get autostartSupported;
+
   /// 当前唤醒词（设置面板展示用）。
   String get wakePhrase;
 

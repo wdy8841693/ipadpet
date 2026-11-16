@@ -6,6 +6,7 @@ import 'package:ffi/ffi.dart';
 
 import '../../core/platform/desktop_window.dart';
 import '../../core/platform/window_placement.dart';
+import 'win32_desktop_channel.dart';
 
 /// Win32 桌面窗口适配层（§10.3）。
 ///
@@ -13,11 +14,22 @@ import '../../core/platform/window_placement.dart';
 ///   - 不用第三方窗口插件，直接 `dart:ffi` 调 user32：行为可控、无额外依赖；
 ///   - Dart 侧一律逻辑像素（= 物理像素 / DPI 缩放），缩放由本文件统一处理；
 ///   - 桌宠移动就是移动窗口，没有全屏透明画布，所以这里只做 SetWindowPos。
-class Win32DesktopWindow implements DesktopWindowAdapter {
-  Win32DesktopWindow({this.windowClass = 'FLUTTER_RUNNER_WIN32_WINDOW'});
+///
+/// [channel] 是与 runner 的桌面通道：原生侧把「显示器/工作区变了」推过来，
+/// 本类据此刷新缓存的 DPI 比例（窗口被拖到不同缩放的显示器上时必须刷新，
+/// 否则逻辑像素 ↔ 物理像素的换算会整体偏掉）。
+class Win32DesktopWindow
+    implements DesktopWindowAdapter, DisplayChangeAware, WindowVisibilityAware {
+  Win32DesktopWindow({
+    this.windowClass = 'FLUTTER_RUNNER_WIN32_WINDOW',
+    this.channel,
+  });
 
   /// Flutter runner 注册的窗口类名（`windows/runner/win32_window.cpp`）。
   final String windowClass;
+
+  /// runner 桌面通道（可选：不传就只在启动时读一次工作区）。
+  final Win32DesktopChannel? channel;
 
   static final DynamicLibrary _user32 = DynamicLibrary.open('user32.dll');
 
@@ -70,6 +82,9 @@ class Win32DesktopWindow implements DesktopWindowAdapter {
   static final int Function(int) _getDpiForWindow = _user32.lookupFunction<
       Uint32 Function(IntPtr), int Function(int)>('GetDpiForWindow');
 
+  static final int Function(int, int) _showWindow = _user32.lookupFunction<
+      Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow');
+
   // Win32 常量。
   static const int _gwlStyle = -16;
   static const int _gwlExStyle = -20;
@@ -94,13 +109,26 @@ class Win32DesktopWindow implements DesktopWindowAdapter {
   static const int _monitorDefaultToNearest = 0x00000002;
   static const int _wmNcLButtonDown = 0x00A1;
   static const int _htCaption = 0x2;
+  static const int _swHide = 0;
+  static const int _swShowNoActivate = 4;
 
   int _hwnd = 0;
   double _scale = 1.0;
   bool _clickThrough = false;
+  bool _visible = true;
+
+  final StreamController<void> _displayChanges =
+      StreamController<void>.broadcast();
+  StreamSubscription<DesktopNativeEvent>? _channelSubscription;
 
   @override
   bool get isReady => _hwnd != 0;
+
+  @override
+  Stream<void> get displayChanges => _displayChanges.stream;
+
+  @override
+  bool get isVisible => _visible;
 
   /// 当前窗口句柄（0 表示还没找到）。
   int get handle => _hwnd;
@@ -122,6 +150,18 @@ class Win32DesktopWindow implements DesktopWindowAdapter {
     }
     _hwnd = hwnd;
     _scale = _readScale();
+
+    // 显示器/工作区变化：刷新 DPI 比例并通知上层重新约束窗口位置（§10.3）。
+    final Win32DesktopChannel? desktopChannel = channel;
+    if (desktopChannel != null) {
+      _channelSubscription = desktopChannel.events.listen((
+        DesktopNativeEvent event,
+      ) {
+        if (event is! DesktopDisplayChangedEvent) return;
+        _refreshScale();
+        if (!_displayChanges.isClosed) _displayChanges.add(null);
+      });
+    }
 
     // 无边框 + 不进任务栏 + 逐像素透明（layered）。
     final int style = _getWindowLongW(_hwnd, _gwlStyle);
@@ -176,6 +216,12 @@ class Win32DesktopWindow implements DesktopWindowAdapter {
     } catch (_) {
       return 1.0;
     }
+  }
+
+  /// 重新读一次 DPI（窗口被拖到不同缩放的显示器上之后必须调用）。
+  void _refreshScale() {
+    if (_hwnd == 0) return;
+    _scale = _readScale();
   }
 
   @override
@@ -303,6 +349,17 @@ class Win32DesktopWindow implements DesktopWindowAdapter {
     _sendMessageW(_hwnd, _wmNcLButtonDown, _htCaption, 0);
   }
 
+  /// 显示/隐藏窗口（托盘「显示/隐藏宠物」）。
+  ///
+  /// 用 `SW_SHOWNOACTIVATE` 而不是 `SW_SHOWNORMAL`：桌宠窗口不该抢焦点，
+  /// 否则用户正在写的文档会被打断。
+  @override
+  Future<void> setVisible(bool visible) async {
+    if (_hwnd == 0) return;
+    _showWindow(_hwnd, visible ? _swShowNoActivate : _swHide);
+    _visible = visible;
+  }
+
   /// 全局光标位置（逻辑像素，屏幕坐标）。用于「透明区域自动穿透」的命中测试。
   @override
   ({double x, double y})? cursorPosition() {
@@ -322,6 +379,9 @@ class Win32DesktopWindow implements DesktopWindowAdapter {
   @override
   Future<void> dispose() async {
     // 窗口生命周期由 runner 管，这里只清缓存句柄。
+    await _channelSubscription?.cancel();
+    _channelSubscription = null;
+    if (!_displayChanges.isClosed) await _displayChanges.close();
     _hwnd = 0;
   }
 }

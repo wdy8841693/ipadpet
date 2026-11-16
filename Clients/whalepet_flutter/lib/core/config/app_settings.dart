@@ -21,6 +21,8 @@ class AppSettings {
     this.wakePhrase = '小鲸小鲸',
     this.wakeAliases = const <String>['小金小金'],
     this.wakeAck = '我在',
+    this.autostartEnabled = false,
+    this.oneShotCommandEnabled = false,
   });
 
   /// 设置文件格式版本。
@@ -56,6 +58,23 @@ class AppSettings {
   final List<String> wakeAliases;
   final String wakeAck;
 
+  /// 是否开机自动启动桌宠（§10.3「开机启动」）。
+  ///
+  /// 这里只记「用户想要什么」；真正写进系统启动项由平台适配层执行
+  /// （`lib/platform/autostart/`），写失败时以适配层返回的状态为准。
+  final bool autostartEnabled;
+
+  /// 是否支持「一句话带命令」（§7.7）。
+  ///
+  /// 打开后待机阶段用整段听写代替唤醒词小语法，「小鲸小鲸，帮我查天气」
+  /// 一句话说完就执行；关掉则退回「唤醒 → 我在 → 说指令」的低功耗两段式。
+  /// 只对「按键语法」引擎有区别（Windows SAPI），系统整段识别端恒定支持。
+  ///
+  /// **默认关闭**：SAPI 通用听写对自定义唤醒词识别很差（实测把「小鲸小鲸」
+  /// 听成「孝敬孝敬」，置信度 0.22），默认开启会让最基本的唤醒都失效。
+  /// 只在用户显式打开、且实测该机器能识别唤醒词时才启用。
+  final bool oneShotCommandEnabled;
+
   /// 服务地址解析结果；空或非法返回 null。
   Uri? get parsedServerUri {
     final String raw = serverUrl.trim();
@@ -82,6 +101,8 @@ class AppSettings {
     String? wakePhrase,
     List<String>? wakeAliases,
     String? wakeAck,
+    bool? autostartEnabled,
+    bool? oneShotCommandEnabled,
   }) {
     return AppSettings(
       serverUrl: serverUrl ?? this.serverUrl,
@@ -98,6 +119,9 @@ class AppSettings {
       wakePhrase: wakePhrase ?? this.wakePhrase,
       wakeAliases: wakeAliases ?? this.wakeAliases,
       wakeAck: wakeAck ?? this.wakeAck,
+      autostartEnabled: autostartEnabled ?? this.autostartEnabled,
+      oneShotCommandEnabled:
+          oneShotCommandEnabled ?? this.oneShotCommandEnabled,
     );
   }
 
@@ -115,6 +139,8 @@ class AppSettings {
         'wake_phrase': wakePhrase,
         'wake_aliases': wakeAliases,
         'wake_ack': wakeAck,
+        'autostart_enabled': autostartEnabled,
+        'one_shot_command_enabled': oneShotCommandEnabled,
       };
 
   static AppSettings fromJson(Map<String, dynamic> json) {
@@ -138,6 +164,8 @@ class AppSettings {
       wakePhrase: _string(json['wake_phrase']) ?? '小鲸小鲸',
       wakeAliases: _stringList(json['wake_aliases'], const <String>['小金小金']),
       wakeAck: _string(json['wake_ack']) ?? '我在',
+      autostartEnabled: _bool(json['autostart_enabled'], false),
+      oneShotCommandEnabled: _bool(json['one_shot_command_enabled'], false),
     );
   }
 

@@ -1,3 +1,17 @@
+/// 一次唤醒词命中：命中的词 + 它后面紧跟着的话（§7.7）。
+///
+/// 整段 ASR（Android / macOS 的系统识别）会把「小鲸小鲸，帮我查天气」整句返回，
+/// 只有拿到「后面那一截」才能实现「一句话带命令」。
+class WakeMatch {
+  const WakeMatch({required this.keyword, required this.rest});
+
+  /// 命中的唤醒词（主词或别名）。
+  final String keyword;
+
+  /// 唤醒词后面跟的话（已去掉紧跟的标点）。用户只说了唤醒词时为空串。
+  final String rest;
+}
+
 /// 唤醒词剥离（§7.7 的整段 ASR 兼容逻辑）。
 ///
 /// KWS 常驻时引擎只报「唤醒了」，但整段听写的结果常常把唤醒词也带进来，
@@ -75,16 +89,54 @@ class WakeMatcher {
   /// 文本里是否含唤醒词（不限句首）。
   bool contains(String text) => match(text) != null;
 
+  /// 找出命中的唤醒词，并给出它**后面**跟的话（§7.7）。
+  ///
+  /// ```text
+  /// 「小鲸小鲸，帮我查天气」 → keyword=小鲸小鲸，rest=帮我查天气
+  /// 「小鲸小鲸」             → keyword=小鲸小鲸，rest=''
+  /// 「今天天气不错」         → null
+  /// ```
+  ///
+  /// 与 [match] 的区别：整段 ASR 会把唤醒词和指令一起返回，只有拿到
+  /// 「后面那一截」才能实现「一句话带命令」（§7.7.3）。
+  WakeMatch? matchWithRest(String text) {
+    final String trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+    for (final String phrase in _sorted) {
+      // 句首命中：最常见的情况。
+      final RegExpMatch? atStart = _loosePattern(phrase).firstMatch(trimmed);
+      if (atStart != null && atStart.start == 0) {
+        return WakeMatch(
+          keyword: phrase,
+          rest: _cleanRest(trimmed.substring(atStart.end)),
+        );
+      }
+      // 句中命中：「你好小鲸小鲸帮我查天气」。
+      final RegExpMatch? inside =
+          _loosePattern(phrase, anchored: false).firstMatch(trimmed);
+      if (inside != null) {
+        return WakeMatch(
+          keyword: phrase,
+          rest: _cleanRest(trimmed.substring(inside.end)),
+        );
+      }
+    }
+    return null;
+  }
+
   /// 是否是「只有唤醒词、没有有效指令」。
   bool isWakeOnly(String text) => strip(text).isEmpty;
 
-  RegExp _loosePattern(String phrase) {
+  RegExp _loosePattern(String phrase, {bool anchored = true}) {
     final String escaped = phrase
         .split('')
         .map((String ch) => RegExp.escape(ch))
         .join(r'[\s,，。、·\-—]*');
-    return RegExp('^$escaped', caseSensitive: false);
+    return RegExp(anchored ? '^$escaped' : escaped, caseSensitive: false);
   }
+
+  /// 去掉唤醒词后面紧跟的标点（§7.7.3）。
+  String _cleanRest(String rest) => rest.replaceFirst(_leadingNoise, '').trim();
 
   static String _normalize(String value) =>
       value.replaceAll(_punctuation, '').toLowerCase();

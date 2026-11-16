@@ -61,6 +61,18 @@ abstract interface class DisplayChangeAware {
   Stream<void> get displayChanges;
 }
 
+/// 可选能力：能控制窗口显隐的窗口适配层（§10.3 托盘「显示/隐藏宠物」）。
+///
+/// 桌宠窗口带 `WS_EX_TOOLWINDOW`，不在任务栏里；隐藏之后没有别的入口能把它
+/// 找回来，所以显隐必须由原生层执行，Dart 只发意图。
+abstract interface class WindowVisibilityAware {
+  /// 显示或隐藏窗口。
+  Future<void> setVisible(bool visible);
+
+  /// 当前窗口是否可见。
+  bool get isVisible;
+}
+
 /// 不支持的平台用的空实现：所有调用都是 no-op，便于在 Linux/macOS 上跑 UI 逻辑测试。
 class NoopDesktopWindow implements DesktopWindowAdapter {
   const NoopDesktopWindow();

@@ -5,16 +5,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core/config/app_paths.dart';
+import 'core/platform/autostart.dart';
+import 'core/platform/desktop_tray.dart';
 import 'core/platform/desktop_window.dart';
 import 'core/voice/speech_output.dart';
 import 'core/voice/voice_engine.dart';
 import 'platform/android/native_bridge.dart';
+import 'platform/autostart/win32_autostart.dart';
 import 'platform/desktop_window/macos_window.dart';
+import 'platform/desktop_window/win32_desktop_channel.dart';
 import 'platform/desktop_window/win32_window.dart';
 import 'platform/secure_storage/keystore_token_store.dart';
 import 'platform/speech_output/android_system_tts.dart';
 import 'platform/speech_output/macos_speech.dart';
 import 'platform/speech_output/powershell_speech.dart';
+import 'platform/tray/win32_tray.dart';
 import 'platform/voice/android_system_voice_engine.dart';
 import 'platform/voice/macos_voice_engine.dart';
 import 'platform/voice/sapi_voice_engine.dart';
@@ -68,8 +73,13 @@ Future<void> _runAndroid() async {
 
 Future<void> _runDesktop() async {
   final AppPaths paths = AppPaths.resolve();
+
+  // Windows 的桌面通道：runner 用它把「显示器变了」「托盘点了什么」推给 Dart。
+  final Win32DesktopChannel? desktopChannel =
+      Platform.isWindows ? Win32DesktopChannel() : null;
+
   final DesktopWindowAdapter window = Platform.isWindows
-      ? Win32DesktopWindow()
+      ? Win32DesktopWindow(channel: desktopChannel)
       : Platform.isMacOS
           ? MacOSDesktopWindow()
           : const NoopDesktopWindow();
@@ -78,6 +88,13 @@ Future<void> _runDesktop() async {
       : Platform.isMacOS
           ? MacOSSpeechOutput()
           : const NoopSpeechOutput();
+
+  // 托盘图标与开机自启目前只有 Windows 端落地（§10.3）。
+  final DesktopTrayController? tray = Platform.isWindows
+      ? Win32Tray(desktopChannel!)
+      : null;
+  final AutostartController? autostart =
+      Platform.isWindows ? Win32Autostart() : null;
 
   // 开发验证钩子：设置环境变量 WHALEPET_VOICE_WAV 指向一段 WAV，
   // 引擎就用 SetInputToWaveFile 代替麦克风，可在无麦克风的机器上跑通全链路。
@@ -93,6 +110,8 @@ Future<void> _runDesktop() async {
     window: window,
     speech: speech,
     voiceEngine: voiceEngine,
+    tray: tray,
+    autostart: autostart,
   );
   await runtime.start();
 

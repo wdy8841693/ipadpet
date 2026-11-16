@@ -23,6 +23,10 @@ dependencies:
 #   - core/ 保持纯 Dart（只依赖 dart:*），可以脱离 Flutter 直接 `dart test`。
 dev_dependencies:
   test: ^1.25.0
+  # 需要 Flutter 二进制消息器（MethodChannel / EventChannel 模拟）的用例用它，
+  # 例如平台语音引擎的测试；纯 Dart 用例仍然只依赖 package:test。
+  flutter_test:
+    sdk: flutter
   flutter_lints: ^6.0.0
 
 flutter:

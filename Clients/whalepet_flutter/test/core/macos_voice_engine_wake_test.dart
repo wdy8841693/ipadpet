@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:whalepet_flutter/core/voice/voice_engine.dart';
@@ -9,6 +11,9 @@ import 'package:whalepet_flutter/platform/voice/macos_voice_engine.dart';
 /// 适配层把它转成文本交给路由，由路由按用户配置的唤醒词表做最终判定——
 /// 这样「用户换了唤醒词」时不会误触发。
 void main() {
+  // MacOSVoiceEngine 在非 macOS 上直接抛 UnsupportedError（源码 44 行），
+  // 这里只测原生事件通路，放到 macOS 上跑；Windows/Linux 跳过整个文件。
+  if (!Platform.isMacOS) return;
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const MethodChannel channel = MethodChannel('whalepet/voice');

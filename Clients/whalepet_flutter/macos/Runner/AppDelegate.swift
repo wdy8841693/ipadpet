@@ -326,6 +326,15 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
       let enabled = bool((call.arguments as? [String: Any])?["enabled"], default: false)
       window.ignoresMouseEvents = enabled
       result(nil)
+    case "setVisible":
+      // 托盘/菜单栏「显示宠物」：隐藏用 orderOut，显示用 orderFront（不抢焦点）。
+      let visible = bool((call.arguments as? [String: Any])?["visible"], default: true)
+      if visible {
+        window.orderFrontRegardless()
+      } else {
+        window.orderOut(nil)
+      }
+      result(nil)
     case "startNativeDrag":
       // 只在鼠标按下/拖动事件里有效；与 isMovableByWindowBackground 互补。
       if let event = NSApplication.shared.currentEvent,

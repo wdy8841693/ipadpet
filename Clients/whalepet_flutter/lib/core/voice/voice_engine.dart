@@ -15,6 +15,7 @@ class VoiceEngineConfig {
     this.endSilenceMs = 700,
     this.wakeConfidence = 0.45,
     this.dictationConfidence = 0.2,
+    this.oneShotCommand = false,
     this.revision = 0,
   });
 
@@ -43,6 +44,22 @@ class VoiceEngineConfig {
   final double wakeConfidence;
   final double dictationConfidence;
 
+  /// 是否支持「一句话带命令」（§7.7）。
+  ///
+  /// 打开后，待机阶段用**整段听写**代替「唤醒词小语法」：识别出整句后由
+  /// [VoiceEventRouter] 在句首匹配唤醒词，并取出后面那一截当指令，
+  /// 于是「小鲸小鲸，帮我查天气」可以一句话说完就执行。
+  ///
+  /// 代价是待机期一直在跑整段 ASR（比纯 KWS 费 CPU）。关掉它就退回
+  /// 「唤醒 → 我在 → 说指令」的低功耗两段式。
+  ///
+  /// 只对「按键语法 + 整段 ASR」这类引擎有意义：Android/macOS 的系统识别
+  /// 本来就是整段 ASR，恒定支持，不需要这个开关。
+  ///
+  /// **默认关闭**：Windows SAPI 的通用听写认不出自定义唤醒词（实测
+  /// 「小鲸小鲸」→「孝敬孝敬」，置信度 0.22），默认开启等于关掉唤醒。
+  final bool oneShotCommand;
+
   /// 服务端配置版本。
   final int revision;
 
@@ -66,6 +83,7 @@ class VoiceEngineConfig {
     int? endSilenceMs,
     double? wakeConfidence,
     double? dictationConfidence,
+    bool? oneShotCommand,
     int? revision,
   }) =>
       VoiceEngineConfig(
@@ -78,6 +96,7 @@ class VoiceEngineConfig {
         endSilenceMs: endSilenceMs ?? this.endSilenceMs,
         wakeConfidence: wakeConfidence ?? this.wakeConfidence,
         dictationConfidence: dictationConfidence ?? this.dictationConfidence,
+        oneShotCommand: oneShotCommand ?? this.oneShotCommand,
         revision: revision ?? this.revision,
       );
 
@@ -90,6 +109,7 @@ class VoiceEngineConfig {
         'end_silence_ms': endSilenceMs,
         'wake_confidence': wakeConfidence,
         'dictation_confidence': dictationConfidence,
+        'one_shot_command': oneShotCommand,
         'revision': revision,
       };
 }
@@ -114,10 +134,21 @@ class VoiceWakeDetectedEvent extends VoiceEngineEvent {
     super.generation,
     required this.keyword,
     required this.confidence,
+    this.trailingText = '',
   });
 
   final String keyword;
   final double confidence;
+
+  /// 唤醒词后面紧跟着的话（§7.7）。
+  ///
+  /// 整段 ASR（Android / macOS 的系统识别）会把「小鲸小鲸帮我查天气」整句返回，
+  /// 这里给出唤醒词之后的那一截。非空就说明用户是「一句话带命令」，
+  /// 此时不必先播「我在」，可以直接把这句话发给 DSH。
+  ///
+  /// 真正的 KWS 引擎（Windows SAPI 关键字语法）拿不到这一截，保持空串，
+  /// 走「唤醒 → 应答 → 聆听」的第一阶段流程。
+  final String trailingText;
 }
 
 /// 中间识别文本（只上屏，不发指令）。
@@ -162,6 +193,32 @@ class VoiceCaptureErrorEvent extends VoiceEngineEvent {
 
   final String code;
   final String message;
+}
+
+/// 采集被外部打断：来电、其它应用抢走音频、麦克风被占用（§10.1）。
+///
+/// 与 [VoiceCaptureErrorEvent] 的区别：这是**可恢复**的中断，
+/// 引擎恢复后还会发 [VoiceEngineRecoveredEvent]。
+class VoiceInterruptionEvent extends VoiceEngineEvent {
+  const VoiceInterruptionEvent({
+    super.generation,
+    required this.reason,
+    required this.message,
+  });
+
+  /// 中断原因：`audio_focus` / `phone_call` / `background`。
+  final String reason;
+
+  /// 给用户看的一句话。
+  final String message;
+}
+
+/// 打断结束，麦克风又可以用了，引擎可以重新开始采集。
+class VoiceEngineRecoveredEvent extends VoiceEngineEvent {
+  const VoiceEngineRecoveredEvent({super.generation, this.detail = ''});
+
+  /// 补充说明（例如「音频焦点回来了」）。
+  final String detail;
 }
 
 /// 语音引擎适配层（§7.5）。

@@ -5,7 +5,11 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -75,13 +79,26 @@ class WhalePetBridge(
     private var asrWakeMode = false
     private var consecutiveErrors = 0
 
+    // 音频焦点 / 来电（§10.1）
+    private val audioManager: AudioManager by lazy {
+        activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+    private var focusRequest: AudioFocusRequest? = null
+    private var focusHeld = false
+
+    /** 采集是否被外部打断（来电、其它应用抢走音频）。 */
+    private var interrupted = false
+
+    private var lastAudioMode: String? = null
+    private var modePoller: Runnable? = null
+
     fun register() {
         methods.setMethodCallHandler(this)
         events.setStreamHandler(this)
     }
 
     fun dispose() {
-        stopAsr()
+        stopAsr(force = true)
         tts?.shutdown()
         tts = null
         ttsReady = false
@@ -92,7 +109,9 @@ class WhalePetBridge(
 
     /** Flutter 侧进入后台：停采集（§10.1「退后台默认停止采集」）。 */
     fun onActivityPause() {
-        stopAsr()
+        // 退后台一律彻底放手：焦点、轮询、打断标记都清掉；
+        // 回来时 Dart 侧会按用户设置重新起。
+        stopAsr(force = true)
     }
 
     // -- EventChannel ---------------------------------------------------------
@@ -150,7 +169,7 @@ class WhalePetBridge(
                     result.success(null)
                 }
                 "asrStop" -> {
-                    stopAsr()
+                    stopAsr(force = call.argument<Boolean>("force") ?: false)
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -375,8 +394,16 @@ class WhalePetBridge(
         asrWakeMode = wakeMode
         asrRunning = true
         consecutiveErrors = 0
+        interrupted = false
+        if (wakeMode) {
+            // 待机唤醒不占音频焦点（§7.6）：把聆听时留下的还回去。
+            abandonAudioFocus()
+        } else {
+            requestAudioFocus()
+        }
         ensureRecognizer()
         startListeningInternal()
+        startModePolling()
     }
 
     private fun ensureRecognizer(): SpeechRecognizer {
@@ -422,14 +449,175 @@ class WhalePetBridge(
         }
     }
 
-    private fun stopAsr() {
+    /**
+     * 停止采集。
+     *
+     * [force] = true 表示用户明确停止（关语音 / 退后台 / 释放）：释放音频焦点、
+     * 停掉来电轮询、清掉打断标记。
+     *
+     * 打断期间的自动停采集传 false：只停识别器，**焦点请求和来电轮询要留着**。
+     * 待机唤醒本来就不占焦点，来电恢复只能靠 `startModePolling()` 报 `normal`；
+     * 如果这里把轮询也停了，Dart 会永远卡在 error 等一个不会来的恢复事件（§10.1）。
+     */
+    private fun stopAsr(force: Boolean = false) {
         asrRunning = false
+        stopRecognizer()
+        if (interrupted && !force) return
+        interrupted = false
+        abandonAudioFocus()
+        stopModePolling()
+    }
+
+    private fun stopRecognizer() {
         try {
             recognizer?.cancel()
             recognizer?.destroy()
         } catch (ignored: Throwable) {
         }
         recognizer = null
+    }
+
+    // -- 音频焦点 / 来电（§10.1） ---------------------------------------------
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                focusHeld = true
+                if (interrupted) {
+                    interrupted = false
+                    emit(mapOf("type" to "audio_focus", "state" to "gain"))
+                }
+            }
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                focusHeld = false
+                markInterrupted("麦克风被其它应用接管")
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                markInterrupted("麦克风被暂时占用")
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                // 只是要求把音量压低，不算中断。
+            }
+        }
+    }
+
+    /**
+     * 采集被打断：先停掉识别（别往一个已经不可用的通道里继续写），
+     * 再把原因告诉 Dart，由协调器决定怎么提示用户、什么时候恢复。
+     */
+    private fun markInterrupted(message: String) {
+        if (interrupted) return
+        interrupted = true
+        asrRunning = false
+        stopRecognizer()
+        emit(
+            mapOf(
+                "type" to "audio_focus",
+                "state" to "loss",
+                "message" to message,
+            ),
+        )
+    }
+
+    /**
+     * 申请音频焦点。
+     *
+     * **只在主动聆听时申请**：用户正在跟宠物说话，这时候让其它应用暂时让路
+     * 是合理的。待机唤醒不申请——低功耗守门器不该打扰用户正在听的音乐
+     * （§7.6）；待机时麦克风被占由识别器自己的报错（ERROR_RECOGNIZER_BUSY）兜底。
+     */
+    private fun requestAudioFocus() {
+        if (focusHeld) return
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        focusHeld = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(attributes)
+                .setOnAudioFocusChangeListener(focusListener, main)
+                .setWillPauseWhenDucked(true)
+                .build()
+            focusRequest = request
+            audioManager.requestAudioFocus(request) ==
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        } else {
+            requestAudioFocusLegacy(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        }
+    }
+
+    /** API 26 以下的旧版焦点申请（用 streamType 表达）。 */
+    @Suppress("DEPRECATION")
+    private fun requestAudioFocusLegacy(duration: Int): Boolean =
+        audioManager.requestAudioFocus(
+            focusListener,
+            AudioManager.STREAM_VOICE_CALL,
+            duration,
+        ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+
+    private fun abandonAudioFocus() {
+        if (!focusHeld && focusRequest == null) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            focusRequest = null
+        } else {
+            abandonAudioFocusLegacy()
+        }
+        focusHeld = false
+    }
+
+    /** API 26 以下的旧版放弃焦点。 */
+    @Suppress("DEPRECATION")
+    private fun abandonAudioFocusLegacy() {
+        audioManager.abandonAudioFocus(focusListener)
+    }
+
+    /**
+     * 轮询音频模式，识别「来电 / 通话中」。
+     *
+     * 用 AudioManager.mode 而不是 READ_PHONE_STATE：不需要敏感权限，
+     * 也能覆盖绝大多数来电场景。
+     */
+    private fun startModePolling() {
+        if (modePoller != null) return
+        val poller = object : Runnable {
+            override fun run() {
+                val mode = currentAudioMode()
+                if (mode != lastAudioMode) {
+                    lastAudioMode = mode
+                    // 先报模式变化，再报中断：Dart 侧据此区分「来电」和
+                    // 「别的应用抢了麦克风」，提示文案才说得准。
+                    emit(mapOf("type" to "audio_mode", "mode" to mode))
+                    if (mode == "in_call" || mode == "ringtone" || mode == "in_communication") {
+                        markInterrupted("检测到来电/通话")
+                    }
+                }
+                main.postDelayed(this, 500)
+            }
+        }
+        modePoller = poller
+        main.postDelayed(poller, 500)
+    }
+
+    private fun stopModePolling() {
+        modePoller?.let { main.removeCallbacks(it) }
+        modePoller = null
+    }
+
+    private fun currentAudioMode(): String = when (audioManager.mode) {
+        AudioManager.MODE_NORMAL -> "normal"
+        AudioManager.MODE_RINGTONE -> "ringtone"
+        AudioManager.MODE_IN_CALL -> "in_call"
+        AudioManager.MODE_IN_COMMUNICATION -> "in_communication"
+        else -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                audioManager.mode == AudioManager.MODE_CALL_SCREENING
+            ) {
+                "call_screening"
+            } else {
+                "unknown"
+            }
+        }
     }
 
     private fun restartSoon(delayMs: Long) {
@@ -479,6 +667,8 @@ class WhalePetBridge(
         }
 
         override fun onError(error: Int) {
+            // 打断期间 recognizer 补的收尾错误不是真错误（我们已经主动停掉了）。
+            if (interrupted) return
             consecutiveErrors++
             emit(
                 mapOf(

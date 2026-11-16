@@ -487,4 +487,185 @@ void main() {
       await rig.dispose();
     });
   });
+
+  group('一句话带命令（§7.7）', () {
+    test('唤醒词后面自带指令：不播「我在」，直接发命令', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceWakeDetectedEvent(
+        keyword: '小鲸小鲸',
+        confidence: 0.8,
+        trailingText: '帮我查一下明天的安排',
+      ));
+      await rig.pump();
+      expect(rig.speech.spoken, isNot(contains('我在')));
+      expect(rig.sent, hasLength(1));
+      expect(rig.sent.single['text'], '帮我查一下明天的安排');
+      expect(rig.sent.single['source'], 'voice');
+      expect(rig.coordinator.state, VoiceSessionState.thinking);
+      await rig.dispose();
+    });
+
+    test('一句话带命令时也上屏到聊天记录', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceWakeDetectedEvent(
+        keyword: '小鲸小鲸',
+        confidence: 0.8,
+        trailingText: '帮我查一下明天的安排',
+      ));
+      await rig.pump();
+      expect(rig.chatLines.where((ChatLike l) => l.fromUser).single.text,
+          '帮我查一下明天的安排');
+      await rig.dispose();
+    });
+
+    test('唤醒词后面只有语气词：当作没听到，播「我在」并进聆听', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceWakeDetectedEvent(
+        keyword: '小鲸小鲸',
+        confidence: 0.8,
+        trailingText: '嗯',
+      ));
+      await rig.pump();
+      expect(rig.speech.spoken, contains('我在'));
+      expect(rig.sent, isEmpty);
+      expect(rig.coordinator.state, VoiceSessionState.listening);
+      await rig.dispose();
+    });
+
+    test('引擎没剥唤醒词时，协调器自己再剥一次（幂等）', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceWakeDetectedEvent(
+        keyword: '小鲸小鲸',
+        confidence: 0.8,
+        trailingText: '小鲸小鲸帮我查天气',
+      ));
+      await rig.pump();
+      expect(rig.sent, hasLength(1));
+      expect(rig.sent.single['text'], '帮我查天气');
+      await rig.dispose();
+    });
+
+    test('没有 trailingText 时保持第一阶段流程（应答 → 聆听）', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(
+          const VoiceWakeDetectedEvent(keyword: '小鲸小鲸', confidence: 0.8));
+      await rig.pump();
+      expect(rig.speech.spoken, contains('我在'));
+      expect(rig.sent, isEmpty);
+      expect(rig.coordinator.state, VoiceSessionState.listening);
+      await rig.dispose();
+    });
+
+    test('聆听阶段只说了语气词：按「没听清」处理，不发命令', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.manualListen();
+      rig.engine.emit(const VoiceFinalTranscriptEvent(text: '嗯', confidence: 0.5));
+      await rig.pump();
+      expect(rig.sent, isEmpty);
+      expect(rig.bubbles, contains('没听清，再说一遍？'));
+      await rig.dispose();
+    });
+  });
+
+  group('音频中断与恢复（§10.1）', () {
+    test('麦克风被占用：进入 error，文字对话仍然可用', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceInterruptionEvent(
+        reason: 'audio_focus',
+        message: '麦克风被其它应用占用',
+      ));
+      await rig.pump();
+      expect(rig.coordinator.state, VoiceSessionState.error);
+      expect(
+        rig.uiEvents
+            .whereType<CoordinatorErrorEvent>()
+            .any((CoordinatorErrorEvent e) => e.message.contains('麦克风被其它应用占用')),
+        isTrue,
+      );
+      await rig.coordinator.submitText('文字还能用');
+      expect(rig.sent.single['text'], '文字还能用');
+      await rig.dispose();
+    });
+
+    test('引擎恢复后自动回到待唤醒', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.emit(const VoiceInterruptionEvent(
+        reason: 'phone_call',
+        message: '检测到来电/通话',
+      ));
+      await rig.pump();
+      expect(rig.coordinator.state, VoiceSessionState.error);
+
+      rig.engine.emit(const VoiceEngineRecoveredEvent());
+      await rig.pump();
+      expect(rig.coordinator.state, VoiceSessionState.waitingWake);
+      expect(rig.engine.log.last, 'wake');
+      await rig.dispose();
+    });
+
+    test('恢复时不在 error 状态就什么都不做（避免误重启引擎）', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      final int inits = rig.engine.log.where((String e) => e == 'init').length;
+      rig.engine.emit(const VoiceEngineRecoveredEvent());
+      await rig.pump();
+      expect(rig.engine.log.where((String e) => e == 'init').length, inits);
+      expect(rig.coordinator.state, VoiceSessionState.waitingWake);
+      await rig.dispose();
+    });
+
+    test('退后台 suspend：停采集但不关语音开关；回前台自动恢复', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      await rig.coordinator.suspend();
+      await rig.pump();
+      expect(rig.coordinator.state, VoiceSessionState.disabled);
+      expect(rig.coordinator.suspended, isTrue);
+      // suspend 不是 disable：语音开关本身还开着。
+      expect(rig.coordinator.enabled, isTrue);
+      // 退后台不该冒「语音关掉啦」。
+      expect(rig.bubbles, isNot(contains('语音关掉啦，想说话随时开～')));
+
+      await rig.coordinator.resume();
+      await rig.pump();
+      expect(rig.coordinator.state, VoiceSessionState.waitingWake);
+      expect(rig.coordinator.suspended, isFalse);
+      await rig.dispose();
+    });
+
+    test('语音本来就没开时，resume 不会把引擎拉起来', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.suspend();
+      await rig.pump();
+      expect(rig.engine.log, isNot(contains('wake')));
+      await rig.coordinator.resume();
+      await rig.pump();
+      expect(rig.engine.log, isNot(contains('wake')));
+      expect(rig.coordinator.state, VoiceSessionState.disabled);
+      await rig.dispose();
+    });
+
+    test('打断时不补 stopListening：原生侧要留着恢复监听（§10.1）', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      rig.engine.log.clear();
+      rig.engine.emit(const VoiceInterruptionEvent(
+        reason: 'phone_call',
+        message: '检测到来电/通话',
+      ));
+      await rig.pump();
+      // 引擎已经自停；协调器再 stop 一次会把 native 的焦点/轮询清掉，
+      // 来电结束后就没有人上报恢复了。
+      expect(rig.engine.log, isNot(contains('stop')));
+      expect(rig.coordinator.state, VoiceSessionState.error);
+      await rig.dispose();
+    });
+  });
 }

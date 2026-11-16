@@ -181,6 +181,10 @@ class MobilePetRuntime extends ChangeNotifier implements PetViewModel {
   @override
   bool get voiceEnabled => _settings.voiceWakeEnabled;
 
+  /// Android 端暂不接开机自启（要写开机广播/AppWidget，收益低于成本）。
+  @override
+  bool get autostartSupported => false;
+
   @override
   String get runtimeClientId => _clientId;
 
@@ -734,17 +738,18 @@ class MobilePetRuntime extends ChangeNotifier implements PetViewModel {
   @override
   Future<void> reconnect() => _restartGateway();
 
-  /// App 进入后台：停采集，避免"偷偷听"。
+  /// App 进入后台：停采集，避免"偷偷听"（§10.1）。
+  ///
+  /// 用 suspend 而不是 disable：语音开关本身没被用户关掉，
+  /// 回到前台应该按原设置恢复，也不该冒一句「语音关掉啦」。
   Future<void> handleBackground() async {
-    await coordinator.disable();
+    await coordinator.suspend();
     await persistNow();
   }
 
-  /// 回到前台：如果用户开着语音就重新启用。
+  /// 回到前台：按用户设置恢复语音。
   Future<void> handleForeground() async {
-    if (_settings.voiceWakeEnabled) {
-      await coordinator.enable();
-    }
+    await coordinator.resume();
   }
 
   // -- Agent 事件 ----------------------------------------------------------

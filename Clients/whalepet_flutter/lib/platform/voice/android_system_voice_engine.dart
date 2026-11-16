@@ -22,7 +22,6 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
       StreamController<VoiceEngineEvent>.broadcast();
 
   StreamSubscription<Map<String, Object?>>? _nativeSubscription;
-  VoiceEngineConfig _config = const VoiceEngineConfig();
   WakeMatcher _matcher = const WakeMatcher(<String>['小鲸小鲸']);
 
   int _generation = 0;
@@ -31,13 +30,15 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
   bool _disposed = false;
   String? _lastWakeText;
 
+  /// 采集被外部打断（来电、其它应用抢走音频）时置位（§10.1）。
+  bool _interrupted = false;
+
   @override
   Stream<VoiceEngineEvent> get events => _events.stream;
 
   @override
   Future<void> initialize(VoiceEngineConfig config) async {
     if (_disposed) return;
-    _config = config;
     _matcher = WakeMatcher(config.wakePhrases);
 
     final bool available = await NativeBridge.asrAvailable();
@@ -66,6 +67,7 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
     _wakeMode = true;
     _listening = true;
     _lastWakeText = null;
+    _interrupted = false;
     await NativeBridge.asrStart(wakeMode: true);
   }
 
@@ -75,6 +77,7 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
     _generation++;
     _wakeMode = false;
     _listening = true;
+    _interrupted = false;
     await NativeBridge.asrStart(wakeMode: false);
   }
 
@@ -84,7 +87,10 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
     _listening = false;
     _wakeMode = false;
     try {
-      await NativeBridge.asrStop();
+      // 用户明确停止：让原生连焦点和来电轮询一起清掉。
+      // 打断期间的自动停不经过这里（协调器不会补 stop），原生侧会保留
+      // 恢复监听等 audio_focus gain / audio_mode normal（§10.1）。
+      await NativeBridge.asrStop(force: true);
     } catch (_) {
       // 已经停了就无所谓
     }
@@ -97,7 +103,7 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
     _generation++;
     _listening = false;
     try {
-      await NativeBridge.asrStop();
+      await NativeBridge.asrStop(force: true);
     } catch (_) {}
     await _nativeSubscription?.cancel();
     _nativeSubscription = null;
@@ -119,12 +125,18 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
         _onFinalTranscript(event);
       case 'error':
         _onNativeError(event);
+      case 'audio_focus':
+        _onAudioFocus(event);
+      case 'audio_mode':
+        _onAudioMode(event);
       default:
         break;
     }
   }
 
   void _onFinalTranscript(Map<String, Object?> event) {
+    // 打断后 recognizer 补的收尾结果不是真指令（原生已经 cancel 过了）。
+    if (_interrupted) return;
     final String text = (event['text'] ?? '').toString().trim();
     final double confidence = (event['confidence'] as num?)?.toDouble() ?? 0;
 
@@ -142,7 +154,9 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
 
     if (_wakeMode) {
       // 常驻唤醒阶段：只有命中唤醒词才算数，其余句子直接丢掉（这是常态，不上报错误）。
-      if (!_matcher.contains(text)) return;
+      // matchWithRest：拿到唤醒词**后面那一截**，一句话带命令才不会被丢掉。
+      final WakeMatch? hit = _matcher.matchWithRest(text);
+      if (hit == null) return;
       if (text == _lastWakeText) return;
       _lastWakeText = text;
       _wakeMode = false;
@@ -150,9 +164,11 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
       unawaited(_stopNative());
       _emit(VoiceWakeDetectedEvent(
         generation: _generation,
-        keyword: _config.wakePhrase,
+        keyword: hit.keyword,
         // 系统识别不区分「唤醒词置信度」，这里给一个固定的中等值，方便上层日志观察
         confidence: confidence == 0 ? 0.6 : confidence,
+        // §7.7：「小鲸小鲸，帮我查天气」整句返回时，后面那截就是指令。
+        trailingText: hit.rest,
       ));
       return;
     }
@@ -207,6 +223,62 @@ class AndroidSystemVoiceEngine implements VoiceEngineAdapter {
     try {
       await NativeBridge.asrStop();
     } catch (_) {}
+  }
+
+  // -- 音频焦点 / 来电（§10.1） -----------------------------------------------
+
+  /// 音频焦点变化：别的应用抢走了音频 → 暂停并告诉用户；焦点回来 → 报告可恢复。
+  void _onAudioFocus(Map<String, Object?> event) {
+    final String state = (event['state'] ?? '').toString();
+    switch (state) {
+      case 'loss':
+      case 'transient_loss':
+        _interrupt(
+          'audio_focus',
+          (event['message'] ?? '麦克风被其它应用占用').toString(),
+        );
+      case 'gain':
+        _recover();
+      default:
+        break;
+    }
+  }
+
+  /// 音频模式变化：来电 / 通话中 → 暂停；回到正常 → 报告可恢复。
+  void _onAudioMode(Map<String, Object?> event) {
+    final String mode = (event['mode'] ?? 'normal').toString();
+    const Set<String> callModes = <String>{
+      'in_call',
+      'ringtone',
+      'in_communication',
+      'call_screening',
+    };
+    if (callModes.contains(mode)) {
+      _interrupt('phone_call', '检测到来电/通话，暂时听不到你说话');
+    } else {
+      _recover();
+    }
+  }
+
+  /// 采集被打断：停掉这一轮，等引擎恢复。
+  void _interrupt(String reason, String message) {
+    if (_disposed || _interrupted) return;
+    _interrupted = true;
+    _generation++;
+    _listening = false;
+    _wakeMode = false;
+    _emit(VoiceInterruptionEvent(
+      generation: _generation,
+      reason: reason,
+      message: message,
+    ));
+  }
+
+  /// 打断结束：通知上层可以重新开始采集。
+  void _recover() {
+    if (_disposed || !_interrupted) return;
+    _interrupted = false;
+    _emit(VoiceEngineRecoveredEvent(generation: _generation));
   }
 
   void _emit(VoiceEngineEvent event) {

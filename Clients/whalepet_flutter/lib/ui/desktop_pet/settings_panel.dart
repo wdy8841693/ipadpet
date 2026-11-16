@@ -39,6 +39,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
   late bool _speak;
   late bool _alwaysOnTop;
   late bool _clickThrough;
+  late bool _autostart;
+  late bool _oneShotCommand;
   bool _saving = false;
   String? _message;
 
@@ -56,6 +58,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _speak = settings.speakResponses;
     _alwaysOnTop = settings.alwaysOnTop;
     _clickThrough = settings.clickThroughWhereTransparent;
+    _autostart = settings.autostartEnabled;
+    _oneShotCommand = settings.oneShotCommandEnabled;
   }
 
   @override
@@ -89,6 +93,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
           .where((String value) => value.isNotEmpty)
           .toList(growable: false),
       wakeAck: _wakeAckController.text.trim(),
+      autostartEnabled: _autostart,
+      oneShotCommandEnabled: _oneShotCommand,
     );
     final String token = _tokenController.text.trim();
     await widget.runtime.applySettings(next, token: token.isEmpty ? null : token);
@@ -174,6 +180,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     value: _voiceWake,
                     onChanged: (bool value) => setState(() => _voiceWake = value),
                   ),
+                  if (widget.desktopOptions)
+                    _SwitchRow(
+                      label: '一句话带命令（唤醒词后直接说指令）',
+                      value: _oneShotCommand,
+                      onChanged: (bool value) =>
+                          setState(() => _oneShotCommand = value),
+                    ),
                   const Text('唤醒词 / 别名（逗号分隔）/ 应答', style: kPanelLabelStyle),
                   const SizedBox(height: 4),
                   _Field(controller: _wakePhraseController, hint: '小鲸小鲸'),
@@ -195,6 +208,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       onChanged: (bool value) =>
                           setState(() => _clickThrough = value),
                     ),
+                    if (runtime.autostartSupported)
+                      _SwitchRow(
+                        label: '开机自动启动',
+                        value: _autostart,
+                        onChanged: (bool value) =>
+                            setState(() => _autostart = value),
+                      ),
                   ],
                   const SizedBox(height: 6),
                   Text(

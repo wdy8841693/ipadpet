@@ -69,8 +69,10 @@ const Set<String> kFatalVoiceErrorCodes = <String>{
 ///   - 各平台（Android 系统识别 / macOS 系统识别 / 将来的 sherpa-onnx）
 ///     共用同一套路由，行为一致，出问题时好对照。
 ///
-/// 状态机的两条硬规则（§7.2 的 generation 守卫在平台层，这里守的是语义）：
+/// 状态机的三条硬规则（§7.2 的 generation 守卫在平台层，这里守的是语义）：
 ///
+///   - 待机模式**只认 final**：整段 ASR 要等句尾判停才知道唤醒词后面有没有
+///     跟着指令，用 partial 触发会把后半句截断（§7.7.4）；
 ///   - 待机模式命中唤醒词后，本轮不再产生任何事件（避免「我在」播报期间
 ///     反复触发唤醒）；
 ///   - 聆听模式只认一个结果：出了 final 之后原生层补的收尾错误一律丢弃
@@ -121,7 +123,12 @@ class VoiceEventRouter {
   List<VoiceEngineEvent> _routeWake(RawVoiceEvent event) {
     // 已经唤醒过了：这一轮剩下的内容全部忽略。
     if (_wakeFired) return const <VoiceEngineEvent>[];
-    if (event is RawPartialEvent) return _matchWake(event.text);
+    // 只认 final（§7.7.4）。
+    //
+    // 整段 ASR 必须等「句尾判停」才知道唤醒词后面有没有跟着指令。
+    // 用 partial 触发唤醒会把后半句截断：「小鲸小鲸帮我查天气」在 partial
+    // 阶段只看到「小鲸小鲸」，指令就丢了。真 KWS（Windows SAPI 关键字语法）
+    // 不走这个路由，它命中即唤醒，没有这个问题。
     if (event is RawFinalEvent) return _matchWake(event.text);
     if (event is RawErrorEvent) {
       // 待机阶段的「没说话」「没听清」是常态（引擎自己会续上），
@@ -139,14 +146,17 @@ class VoiceEventRouter {
   List<VoiceEngineEvent> _matchWake(String rawText) {
     final String text = rawText.trim();
     if (text.isEmpty) return const <VoiceEngineEvent>[];
-    final String? keyword = WakeMatcher(_wakePhrases).match(text);
-    if (keyword == null) return const <VoiceEngineEvent>[];
+    // matchWithRest：拿到唤醒词**后面那一截**，才能实现「一句话带命令」。
+    final WakeMatch? hit = WakeMatcher(_wakePhrases).matchWithRest(text);
+    if (hit == null) return const <VoiceEngineEvent>[];
     _wakeFired = true;
     return <VoiceEngineEvent>[
       VoiceWakeDetectedEvent(
-        keyword: keyword,
+        keyword: hit.keyword,
         // 系统识别不区分「唤醒词置信度」，给一个固定的中等值方便上层观察。
         confidence: 0.6,
+        // 唤醒词后面跟着的话（§7.7）。空串 = 用户只说了唤醒词。
+        trailingText: hit.rest,
       ),
     ];
   }

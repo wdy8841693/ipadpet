@@ -4,14 +4,15 @@ import '../agent/agent_protocol.dart';
 import '../pet/pet_state.dart';
 import 'speech_output.dart';
 import 'speech_queue.dart';
+import 'spoken_command.dart';
 import 'voice_engine.dart';
 import 'wake_matcher.dart';
 
 /// 语音会话状态（§7.2）。
 ///
-/// 第一版按文档两阶段实现里的「第一阶段」：
-/// `等待唤醒 →（说「我在」）→ 聆听指令 → Agent 执行 → 播报 → 回到等待唤醒`。
-/// 一句话带命令（§7.7）留到下一期。
+/// 按文档两阶段实现里的「第一阶段」与「第二阶段」并行：
+/// - 第一阶段：`等待唤醒 →（说「我在」）→ 聆听指令 → Agent 执行 → 播报 → 回到等待唤醒`；
+/// - 第二阶段（§7.7）：唤醒词后面直接跟了指令时，跳过「我在」，直接发命令。
 enum VoiceSessionState {
   disabled,
   preparing,
@@ -143,6 +144,10 @@ class VoiceSessionCoordinator {
   /// 引擎当前实际生效的配置版本；与服务端/设置里的 revision 不一致就要重建语法。
   int _engineRevision = -1;
 
+  /// 退到后台时置位：采集已停，但语音开关本身没被用户关掉（§10.1）。
+  bool _suspended = false;
+  bool get suspended => _suspended;
+
   String? _activeRequestId;
   int _activeGeneration = 0;
 
@@ -161,6 +166,16 @@ class VoiceSessionCoordinator {
   Future<void> enable() async {
     if (_disposed) return;
     final int gen = ++_generation;
+    _suspended = false;
+    await _startEngine(gen);
+  }
+
+  /// 初始化引擎并进入待唤醒。
+  ///
+  /// [enable] / 回到前台 [resume] / 中断恢复都走这一条路径，
+  /// 避免三处各写一份「初始化 → 起 KWS → 回待唤醒」而走出三种行为。
+  Future<void> _startEngine(int gen, {bool announce = true}) async {
+    if (_disposed || gen != _generation) return;
     final VoiceEngineConfig snapshot = config;
     _setState(VoiceSessionState.preparing);
     try {
@@ -175,11 +190,13 @@ class VoiceSessionCoordinator {
       await engine.startWakeListening();
       if (_disposed || gen != _generation) return;
       _setState(VoiceSessionState.waitingWake);
-      _emit(CoordinatorBubbleEvent(
-        text: '语音就绪，说「${config.wakePhrase}」叫我～',
-        seconds: 5,
-        generation: gen,
-      ));
+      if (announce) {
+        _emit(CoordinatorBubbleEvent(
+          text: '语音就绪，说「${config.wakePhrase}」叫我～',
+          seconds: 5,
+          generation: gen,
+        ));
+      }
       _emit(CoordinatorPetStateEvent(state: PetState.idle, generation: gen));
     } catch (error) {
       if (_disposed || gen != _generation) return;
@@ -189,11 +206,45 @@ class VoiceSessionCoordinator {
     }
   }
 
+  /// 退到后台：停采集、停播报，但**保留语音开关**（§10.1）。
+  ///
+  /// 与 [disable] 的区别：用户主动关语音和「切到后台」是两件事，
+  /// 后者回到前台应该按原设置恢复（§10.1「回来按用户设置恢复」），
+  /// 顺便也避免每次切后台都冒一句「语音关掉啦」。
+  Future<void> suspend() async {
+    if (_disposed || _suspended) return;
+    _suspended = true;
+    final int gen = ++_generation;
+    _listenTimer?.cancel();
+    queue.clear();
+    _speaking = false;
+    _speakingId = null;
+    _activeRequestId = null;
+    await speech.stop();
+    await engine.stopListening();
+    if (gen != _generation) return;
+    _setState(VoiceSessionState.disabled);
+    _emit(CoordinatorPetStateEvent(state: PetState.idle, generation: gen));
+  }
+
+  /// 回到前台：恢复退后台前的语音状态（§10.1）。
+  Future<void> resume() async {
+    if (_disposed || !_suspended) return;
+    _suspended = false;
+    if (!_enabled) {
+      _setState(VoiceSessionState.disabled);
+      return;
+    }
+    final int gen = ++_generation;
+    await _startEngine(gen, announce: false);
+  }
+
   /// 关闭语音：停止采集、识别与播报，宠物回到普通离线状态。
   Future<void> disable() async {
     if (_disposed) return;
     final int gen = ++_generation;
     _enabled = false;
+    _suspended = false;
     _engineRevision = -1;
     _listenTimer?.cancel();
     queue.clear();
@@ -210,6 +261,7 @@ class VoiceSessionCoordinator {
   /// 手动点击麦克风：跳过 KWS，直接聆听。
   Future<void> manualListen() async {
     if (_disposed) return;
+    _suspended = false;
     if (!_engineReady) {
       await enable();
       if (!_engineReady) return;
@@ -355,11 +407,24 @@ class VoiceSessionCoordinator {
         _onRecognitionError(event, gen);
       case VoiceCaptureErrorEvent():
         _onCaptureError(event, gen);
+      case VoiceInterruptionEvent():
+        _onInterruption(event, gen);
+      case VoiceEngineRecoveredEvent():
+        _onEngineRecovered(event, gen);
     }
   }
 
   void _onWake(VoiceWakeDetectedEvent event, int gen) {
     _listenTimer?.cancel();
+    // §7.7 一句话带命令：整段 ASR 会把「小鲸小鲸，帮我查天气」整句返回，
+    // 唤醒词后面已经跟着有效指令时，不必先播「我在」，直接发出去。
+    final String? command = _effectiveCommand(event.trailingText);
+    if (command != null) {
+      _emit(CoordinatorChatEvent(fromUser: true, text: command, generation: gen));
+      _emit(CoordinatorTranscriptEvent(text: '', generation: gen));
+      unawaited(_dispatchCommand(command, gen, source: 'voice'));
+      return;
+    }
     _emit(CoordinatorBubbleEvent(
       text: '在呢，听着～',
       seconds: 3,
@@ -379,12 +444,25 @@ class VoiceSessionCoordinator {
     _pumpSpeech(gen);
   }
 
+  /// 唤醒词后面那句话算不算一条有效指令；有效返回清理后的文本，否则 null。
+  ///
+  /// 引擎通常已经把唤醒词剥掉了，这里再剥一次是**幂等**的：
+  /// 剥完还是原样（因为已经不在句首了），所以不会把指令削掉。
+  String? _effectiveCommand(String raw) {
+    final String trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final String stripped = WakeMatcher(config.wakePhrases).strip(trimmed);
+    if (!hasEffectiveContent(stripped)) return null;
+    return stripped;
+  }
+
   void _onFinalTranscript(VoiceFinalTranscriptEvent event, int gen) {
     _setState(VoiceSessionState.recognizing);
     final WakeMatcher matcher = WakeMatcher(config.wakePhrases);
     final String command = matcher.strip(event.text);
-    if (command.isEmpty) {
-      // 空识别：没超时就允许重说，超时回待唤醒。
+    // 空识别、或者只说了「嗯 / 帮我」这种语气词：都算「没听清」。
+    if (!hasEffectiveContent(command)) {
+      // 没超时就允许重说，超时回待唤醒。
       if (_state == VoiceSessionState.recognizing) {
         _emit(CoordinatorBubbleEvent(
           text: '没听清，再说一遍？',
@@ -426,6 +504,37 @@ class VoiceSessionCoordinator {
       generation: gen,
     ));
     _emit(CoordinatorPetStateEvent(state: PetState.idle, generation: gen));
+  }
+
+  /// 采集被外部打断（来电、其它应用抢走音频）：这一轮作废，等引擎恢复。
+  ///
+  /// 不把它当成致命错误：引擎恢复后会发 [VoiceEngineRecoveredEvent]，
+  /// 那时再重新初始化引擎回到待唤醒（§10.1）。
+  void _onInterruption(VoiceInterruptionEvent event, int gen) {
+    if (_state == VoiceSessionState.disabled) return;
+    _listenTimer?.cancel();
+    queue.clear();
+    _speaking = false;
+    _speakingId = null;
+    _activeRequestId = null;
+    _engineReady = false;
+    // 不要在这里补 engine.stopListening()：打断事件本身就意味着引擎已经
+    // 停了采集，原生侧还留着音频焦点/来电轮询等恢复信号。再 stop 一次会把
+    // 恢复监听一起清掉，来电结束后永远等不到 VoiceEngineRecoveredEvent（§10.1）。
+    _setState(VoiceSessionState.error);
+    _emit(CoordinatorErrorEvent(
+      message: '${event.message}（稍后会自动恢复，文字对话仍然可用）',
+      generation: gen,
+    ));
+    _emit(CoordinatorPetStateEvent(state: PetState.idle, generation: gen));
+  }
+
+  /// 中断结束：重新初始化引擎，回到待唤醒。
+  void _onEngineRecovered(VoiceEngineRecoveredEvent event, int gen) {
+    if (_state != VoiceSessionState.error) return;
+    if (!_enabled || _suspended || _disposed) return;
+    final int next = ++_generation;
+    unawaited(_startEngine(next, announce: false));
   }
 
   // -- 命令 ----------------------------------------------------------------

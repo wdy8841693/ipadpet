@@ -14,6 +14,8 @@ import '../../core/pet/dialogue.dart';
 import '../../core/pet/pet_behavior.dart';
 import '../../core/pet/pet_state.dart';
 import '../../core/pet/pet_vitals.dart';
+import '../../core/platform/autostart.dart';
+import '../../core/platform/desktop_tray.dart';
 import '../../core/platform/desktop_window.dart';
 import '../../core/platform/window_placement.dart';
 import '../../core/storage/pet_save.dart';
@@ -39,8 +41,12 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     required this.voiceEngine,
     TokenStorage? tokenStorage,
     Random? random,
+    DesktopTrayController? tray,
+    AutostartController? autostart,
   })  : _tokenStorage = tokenStorage ?? TokenStore(file: paths.tokenFile),
-        _random = random ?? Random() {
+        _random = random ?? Random(),
+        _tray = tray,
+        _autostart = autostart {
     _behavior = PetBehavior(random: _random);
     _dialogue = Dialogue(random: _random);
     coordinator = VoiceSessionCoordinator(
@@ -79,12 +85,25 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
       _displaySubscription = (window as DisplayChangeAware).displayChanges
           .listen((_) => unawaited(_refreshWorkArea()));
     }
+    // 托盘（Windows 才有）：托盘菜单与右键菜单走同一套行为，避免两处逻辑分叉。
+    final DesktopTrayController? trayController = _tray;
+    if (trayController != null) {
+      _traySubscription = trayController.actions.listen((DesktopTrayAction action) {
+        unawaited(_onTrayAction(action));
+      });
+    }
   }
 
   final AppPaths paths;
   final DesktopWindowAdapter window;
   final SpeechOutputAdapter speech;
   final VoiceEngineAdapter voiceEngine;
+
+  /// 托盘适配层（Windows 有；其它平台为 null）。
+  final DesktopTrayController? _tray;
+
+  /// 开机自启适配层（Windows 有；其它平台为 null）。
+  final AutostartController? _autostart;
   final TokenStorage _tokenStorage;
   final Random _random;
 
@@ -112,6 +131,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   StreamSubscription<CoordinatorEvent>? _coordinatorSubscription;
   StreamSubscription<VoiceSessionState>? _voiceStateSubscription;
   StreamSubscription<void>? _displaySubscription;
+  StreamSubscription<DesktopTrayAction>? _traySubscription;
   AgentConnectionState _connectionState = AgentConnectionState.disconnected;
   VoiceSessionState _voiceState = VoiceSessionState.disabled;
   String? _token;
@@ -139,6 +159,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   PetPanel _panel = PetPanel.none;
   bool _menuOpen = false;
   bool _clickThrough = false;
+  bool _windowVisible = true;
   bool _windowReady = false;
   bool _started = false;
   bool _servicesStarted = false;
@@ -184,6 +205,13 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   VoiceSessionState get voiceState => _voiceState;
   @override
   bool get voiceEnabled => _settings.voiceWakeEnabled;
+
+  /// 平台是否支持开机自启（Windows 有；其它平台没有）。
+  @override
+  bool get autostartSupported => _autostart != null;
+
+  /// 桌宠窗口当前是否可见（托盘可以把它藏起来）。
+  bool get windowVisible => _windowVisible;
 
   /// 本机客户端 id（设置面板里展示，便于服务端日志对照）。
   @override
@@ -261,6 +289,12 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     if (_settings.voiceWakeEnabled) {
       await coordinator.enable();
     }
+    // 托盘菜单状态（窗口可见性、语音开关）要与真实状态一致。
+    await _syncTrayState();
+    if (_settings.autostartEnabled) {
+      // 便携包换了目录后，启动项里记的还是旧路径，这里顺手刷新一次。
+      await _applyAutostart(true);
+    }
     _ticker = Timer.periodic(const Duration(milliseconds: _tickMs), (_) => _onTick());
     notifyListeners();
   }
@@ -271,6 +305,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
         wakePhrase: settings.wakePhrase,
         wakeAliases: settings.wakeAliases,
         wakeAck: settings.wakeAck,
+        oneShotCommand: settings.oneShotCommandEnabled,
         revision: revision,
       );
 
@@ -388,6 +423,8 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     unawaited(_coordinatorSubscription?.cancel());
     unawaited(_voiceStateSubscription?.cancel());
     unawaited(_displaySubscription?.cancel());
+    unawaited(_traySubscription?.cancel());
+    unawaited(_tray?.dispose());
     unawaited(coordinator.dispose());
     unawaited(_gateway?.dispose());
     unawaited(speech.dispose());
@@ -694,7 +731,70 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     } else {
       await coordinator.disable();
     }
+    await _syncTrayState();
     notifyListeners();
+  }
+
+  // -- 托盘 ------------------------------------------------------------------
+
+  /// 托盘菜单动作（§10.3）。与右键菜单共用行为，避免两套逻辑分叉。
+  Future<void> _onTrayAction(DesktopTrayAction action) async {
+    switch (action) {
+      case DesktopTrayAction.toggleVisible:
+        await _toggleWindowVisible();
+      case DesktopTrayAction.toggleVoice:
+        await toggleVoice();
+      case DesktopTrayAction.openSettings:
+        openPanel(PetPanel.settings);
+      case DesktopTrayAction.quit:
+        await _quitApp();
+    }
+    await _syncTrayState();
+  }
+
+  /// 显示/隐藏桌宠窗口。
+  ///
+  /// 桌宠窗口是 `WS_EX_TOOLWINDOW`，不在任务栏；隐藏之后只能靠托盘找回来，
+  /// 所以显隐必须走原生层（Dart 只发意图）。
+  Future<void> _toggleWindowVisible() async {
+    // 注意这里用 Object 而不是 DesktopWindowAdapter：
+    // WindowVisibilityAware 是与 DesktopWindowAdapter **无关**的接口，
+    // Dart 的类型提升要求「被提升的类型是声明类型的子类型」，
+    // 直接按 DesktopWindowAdapter 声明的话 is 检查后无法提升，编译不过。
+    final Object adapter = window;
+    if (adapter is! WindowVisibilityAware) return;
+    final WindowVisibilityAware visibility = adapter;
+    await visibility.setVisible(!visibility.isVisible);
+    _windowVisible = visibility.isVisible;
+    notifyListeners();
+  }
+
+  /// 把当前状态同步给托盘菜单（窗口可见性、语音唤醒开关）。
+  Future<void> _syncTrayState() async {
+    final DesktopTrayController? tray = _tray;
+    if (tray == null) return;
+    try {
+      await tray.updateState(
+        visible: _windowVisible,
+        voiceEnabled: _settings.voiceWakeEnabled,
+      );
+    } catch (_) {
+      // 托盘不可用不影响主流程。
+    }
+  }
+
+  /// 退出：先落盘，再让平台层结束进程。
+  Future<void> _quitApp() async {
+    await persistNow();
+    final DesktopTrayController? tray = _tray;
+    if (tray == null) {
+      exit(0);
+    }
+    await tray.quit();
+    // 兜底：平台层没把进程收掉的话，1.5 秒后自己退。
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 1500), () {
+      exit(0);
+    }));
   }
 
   /// 手动点击说话（跳过唤醒词）。
@@ -718,7 +818,10 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
         next.serverUrl.trim() != _settings.serverUrl.trim();
     final bool voiceChanged = next.wakePhrase != _settings.wakePhrase ||
         next.wakeAck != _settings.wakeAck ||
+        next.oneShotCommandEnabled != _settings.oneShotCommandEnabled ||
         next.wakeAliases.join('|') != _settings.wakeAliases.join('|');
+    final bool autostartChanged =
+        next.autostartEnabled != _settings.autostartEnabled;
     _settings = next;
     await _settingsStore?.save(_settings);
     await window.setAlwaysOnTop(next.alwaysOnTop);
@@ -738,10 +841,30 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     } else if (!next.voiceWakeEnabled && coordinator.enabled) {
       await coordinator.disable();
     }
+    if (autostartChanged) {
+      await _applyAutostart(next.autostartEnabled);
+    }
     if (serverChanged || token != null) {
       await _restartGateway();
     }
+    await _syncTrayState();
     notifyListeners();
+  }
+
+  /// 写系统开机自启；失败时回滚设置并给出原因。
+  Future<void> _applyAutostart(bool enabled) async {
+    final AutostartController? autostart = _autostart;
+    if (autostart == null) return;
+    bool ok = false;
+    try {
+      ok = await autostart.setEnabled(enabled);
+    } catch (error) {
+      _lastError = '开机自启设置失败：$error';
+    }
+    if (ok) return;
+    _lastError ??= '开机自启设置失败（系统拒绝了写入）';
+    _settings = _settings.copyWith(autostartEnabled: !enabled);
+    await _settingsStore?.save(_settings);
   }
 
   Future<void> _restartGateway() async {

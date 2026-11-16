@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../core/voice/voice_engine.dart';
+import '../../core/voice/wake_matcher.dart';
 
 /// Windows 本地语音引擎（KWS + VAD + ASR 全在原生层）。
 ///
@@ -38,6 +39,12 @@ class SapiVoiceEngine implements VoiceEngineAdapter {
   String _mode = 'idle';
   bool _disposed = false;
 
+  /// 唤醒词表（主词 + 别名）：整段听写模式下用它匹配句首唤醒词（§7.7）。
+  List<String> _wakePhrases = const <String>[];
+
+  /// 整段听写命中唤醒词所需的最低置信度。
+  double _wakeConfidence = 0.45;
+
   static const String _script = r'''
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
@@ -51,6 +58,7 @@ $state = @{
   listenTimeoutMs = 10000
   endSilenceMs = 700
   audioFile = ''
+  oneShot = $false
 }
 $script:engine = $null
 $script:wakeGrammar = $null
@@ -75,8 +83,17 @@ function Set-Mode([string]$next, [int]$gen) {
     Emit "MODE idle $gen"
     return
   }
-  $script:wakeGrammar.Enabled = ($next -eq 'wake')
-  $script:dictGrammar.Enabled = ($next -eq 'listen')
+  # 待机有两条路（§7.7）：
+  #   - oneShot：整段听写语法，Dart 侧用 WakeMatcher 匹配句首唤醒词并取出
+  #     「后面那一截」，于是「小鲸小鲸，帮我查天气」一句话说完就执行；
+  #   - 否则：唤醒词小语法（低功耗），命中即唤醒，走「我在 → 聆听」两段式。
+  if ($next -eq 'wake') {
+    $script:wakeGrammar.Enabled = (-not $state.oneShot)
+    $script:dictGrammar.Enabled = [bool]$state.oneShot
+  } else {
+    $script:wakeGrammar.Enabled = $false
+    $script:dictGrammar.Enabled = $true
+  }
   if ($next -eq 'listen') {
     $script:engine.InitialSilenceTimeout = [TimeSpan]::FromMilliseconds($state.listenTimeoutMs)
     $script:engine.EndSilenceTimeout = [TimeSpan]::FromMilliseconds($state.endSilenceMs)
@@ -98,6 +115,10 @@ function Initialize-Engine([string]$configPath) {
   $state.dictConf = [double]$cfg.dictation_confidence
   $state.listenTimeoutMs = [int]$cfg.listen_timeout_ms
   $state.endSilenceMs = [int]$cfg.end_silence_ms
+  # 一句话带命令（§7.7）：待机用整段听写还是唤醒词小语法。
+  if ($cfg.PSObject.Properties.Name -contains 'one_shot_command') {
+    $state.oneShot = [bool]$cfg.one_shot_command
+  }
   $state.audioFile = ''
   if ($cfg.PSObject.Properties.Name -contains 'audio_file' -and $cfg.audio_file) {
     $state.audioFile = [string]$cfg.audio_file
@@ -145,6 +166,12 @@ function Initialize-Engine([string]$configPath) {
     if ($name -eq 'wake' -and $s.mode -eq 'wake') {
       if ($conf -lt [double]$s.wakeConf) { return }
       [Console]::Out.WriteLine("WAKE $g $conf $text")
+      [Console]::Out.Flush()
+    } elseif ($s.mode -eq 'wake' -and $name -eq 'dictation') {
+      # 整段听写命中：原样上报整句，由 Dart 侧用 WakeMatcher 判断
+      # 「是不是句首唤醒词 + 后面那截指令」（§7.7）。
+      if ($conf -lt [double]$s.dictConf) { return }
+      [Console]::Out.WriteLine("SENT $g $conf $text")
       [Console]::Out.Flush()
     } elseif ($s.mode -eq 'listen') {
       if ($conf -lt [double]$s.dictConf) { return }
@@ -246,6 +273,8 @@ try { Get-EventSubscriber | Unregister-Event -Force -ErrorAction SilentlyContinu
 
     final Map<String, dynamic> json = config.toJson();
     if (audioFile != null) json['audio_file'] = audioFile;
+    _wakePhrases = config.wakePhrases;
+    _wakeConfidence = config.wakeConfidence;
     final File configFile =
         File('${dir.path}${Platform.pathSeparator}config.json');
     await configFile.writeAsString(jsonEncode(json), flush: true);
@@ -330,6 +359,21 @@ try { Get-EventSubscriber | Unregister-Event -Force -ErrorAction SilentlyContinu
           _emit(VoiceWakeDetectedEvent(
             keyword: parts.sublist(3).join(' '),
             confidence: double.tryParse(parts[2]) ?? 0,
+          ));
+        }
+      case 'SENT':
+        // 整段听写命中（§7.7）：原句里可能带着唤醒词，剥掉后剩下的就是指令。
+        if (parts.length >= 4) {
+          final double confidence = double.tryParse(parts[2]) ?? 0;
+          if (confidence < _wakeConfidence) break;
+          final String text = parts.sublist(3).join(' ');
+          final WakeMatch? hit =
+              WakeMatcher(_wakePhrases).matchWithRest(text);
+          if (hit == null) break;
+          _emit(VoiceWakeDetectedEvent(
+            keyword: hit.keyword,
+            confidence: confidence,
+            trailingText: hit.rest,
           ));
         }
       case 'PARTIAL':

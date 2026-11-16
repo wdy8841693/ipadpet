@@ -25,13 +25,24 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = ROOT / 'build' / 'windows' / 'x64' / 'runner' / 'Release'
+# FLUTTER_BUILD_DIR 可以把构建目录挪走：多人/多会话同时在同一个工程里构建时，
+# 共用 build/ 会互相覆盖（而且 Flutter 工具会解析 build/ 里的 .vcxproj）。
+BUILD_DIR = Path(os.environ.get('FLUTTER_BUILD_DIR') or (ROOT / 'build'))
+RELEASE = BUILD_DIR / 'windows' / 'x64' / 'runner' / 'Release'
 DIST = ROOT / 'dist'
 
 # 主程序导入表里点名要的（缺任一个，干净机器上启动就失败）。
 REQUIRED_DLLS = ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
 # Win8.1+ 系统自带；只为兼容更老的机器才 app-local 附带，找不到就跳过。
 OPTIONAL_DLLS = ('d3dcompiler_47.dll',)
+
+# AOT 发布包里不该出现的调试残留：build/ 目录被 debug 构建污染时，
+# kernel_blob.bin（43MB JIT 内核）会留在 Release/data/flutter_assets/ 里，
+# 打包时必须剔掉，否则包体翻一倍且运行模式混乱。
+DEBUG_ONLY_ARTIFACTS = ('kernel_blob.bin', 'vm_snapshot_data', 'isolate_snapshot_data')
+
+# AOT 快照：release 构建的标志物。
+AOT_SNAPSHOT = 'data/app.so'
 
 
 def read_version() -> str:
@@ -84,6 +95,11 @@ def package(version: str) -> Path:
     exe = RELEASE / 'whalepet_flutter.exe'
     if not exe.is_file():
         raise SystemExit(f'找不到可执行文件：{exe}')
+    aot = RELEASE / AOT_SNAPSHOT
+    if not aot.is_file():
+        raise SystemExit(
+            f'找不到 AOT 快照（{AOT_SNAPSHOT}）：当前目录不是 release 构建产物。\n'
+            '请先执行 flutter build windows --release 再打包。')
 
     dlls, missing = resolve_runtime_dlls()
     if missing:
@@ -112,8 +128,11 @@ def package(version: str) -> Path:
     )
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for path in sorted(RELEASE.rglob('*')):
-            if path.is_file():
-                zf.write(path, str(path.relative_to(RELEASE)))
+            if not path.is_file():
+                continue
+            if path.name in DEBUG_ONLY_ARTIFACTS:
+                continue
+            zf.write(path, str(path.relative_to(RELEASE)))
         for name, src in sorted(dlls.items()):
             if not (RELEASE / name).is_file():
                 zf.write(src, name)
