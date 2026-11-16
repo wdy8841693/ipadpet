@@ -81,6 +81,14 @@ flutter build windows           # 产物：build/windows/x64/runner/Release/
 python tool/package_release.py  # 打包成 dist/whalepet-windows-x64-<ver>.zip
 ```
 
+> **便携包必须自带 VC 运行库。** `flutter build` 的 Release 目录里只有
+> `whalepet_flutter.exe`、`flutter_windows.dll`、`data/`，而主程序是动态链接 MSVC
+> 运行库的（导入表点名 `VCRUNTIME140.dll`、`MSVCP140.dll`），干净的 Windows 上双击会报
+> 「找不到 VCRUNTIME140.dll」。`tool/package_release.py` 因此会把本机的
+> `vcruntime140*.dll` / `msvcp140.dll`（外加 `d3dcompiler_47.dll`）以微软支持的
+> app-local 方式一起打进包；找不到就地报错，不会产出残包（可用 `WHALEPET_DLL_DIR`
+> 指向含这些 DLL 的目录）。
+
 纯核心逻辑（不需要 Flutter、不需要图形环境）：
 
 ```bash
@@ -298,6 +306,19 @@ UI 真机确认：透明窗浮于壁纸（无黑框）、单击摸头、双击�
 
 开发环境注意：本机**没有默认录音设备**，所以麦克风实时链路用 WAV 输入验证；接上麦克风后
 在设置里打开唤醒即可用。引擎实例退出时会注销事件订阅，避免遗留宿主进程。
+
+### 发布包复验（2026-11-16，提交 `c08fd97` = GitHub `main` = tag `v1.3.0`）
+
+```text
+flutter build windows --release           → 成功（在该提交上重建，不是旧产物）
+python tool/package_release.py --no-build → dist/whalepet-windows-x64-0.3.1+2.zip（15.5 MiB）
+解压到空目录重新启动 + mock /api/agent    → hello → 连续 6 轮 command，语音闭环正常
+```
+
+复验时发现的分发缺陷：Release 目录里没有 VC 运行库，`whalepet_flutter.exe` 的导入表却点名
+`MSVCP140.dll` / `VCRUNTIME140.dll`，干净 Windows 上双击会直接报「找不到 VCRUNTIME140.dll」。
+`tool/package_release.py` 已改为把 `vcruntime140*.dll` / `msvcp140.dll` / `d3dcompiler_47.dll`
+一起打进包（app-local），缺 DLL 时直接失败而不是产出残包。
 
 ## 验证记录（macOS 15.8.3 / Intel，2026-11-16）
 

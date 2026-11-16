@@ -166,6 +166,9 @@ flutter build windows --release              # Release
 python tool/package_release.py --no-build    # dist/whalepet-windows-x64-<version>.zip
 ```
 
+便携包自带 VC 运行库（`vcruntime140*` / `msvcp140`，app-local），目标机不用装
+VC++ Redistributable；整目录一起拷贝，别只拿 exe。
+
 启动后是一个 380×560 的**透明置顶窗口**，里面只有宠物和气泡：单击摸头、双击聊天、
 右键菜单（摸头/投喂/玩/语音开关/点击说话/设置/睡觉/重连/退出）、按住拖动整窗移动；
 鼠标移到透明区域自动穿透，不挡后面软件的点击。第一次用先右键 →「设置」，

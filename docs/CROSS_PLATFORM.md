@@ -1217,7 +1217,7 @@ Windows（阶段 E）：
   播报期间闭麦，`SpeechQueue` 去重/优先级/「回答后不念做完了」；
 - 存储：`%APPDATA%\WhalePet\`，令牌 DPAPI（`CryptProtectData` + 应用附加熵），
   存档原子写并把 Windows `rename` 覆盖语义的差异补掉；
-- 发布：`tool/package_release.py` 打出便携 zip（含使用说明）。
+- 发布：`tool/package_release.py` 打出便携 zip（含使用说明 + VC 运行库 app-local）。
 
 macOS（阶段 D，文字版）：
 
@@ -1286,6 +1286,17 @@ response → stop 5（闭麦播回答）→ wake 6 → WAKE 6 → stop 7 → lis
 
 服务端每轮都收到 `command`，气泡上屏「收到啦，你说的…」，播完自动回待唤醒。Release 版二进制
 同样跑通。本机无默认录音设备，麦克风实时链路用 WAV 注入验证。
+
+发布包复验（提交 `c08fd97` = GitHub `main` = tag `v1.3.0`）：在该提交上重建
+`flutter build windows --release`，`tool/package_release.py --no-build` 产出
+`dist/whalepet-windows-x64-0.3.1+2.zip`（15.5 MiB）；**解压到空目录**重启 + mock
+`/api/agent`，`hello` → 连续多轮 `command`，语音闭环正常。
+
+复验暴露的分发缺陷：Release 目录只有 exe / `flutter_windows.dll` / `data/`，但主程序导入表点名
+`MSVCP140.dll`、`VCRUNTIME140.dll`（动态 CRT），干净 Windows 上双击会报「找不到
+VCRUNTIME140.dll」——这正是 §10.3 里「安装包包含所需原生运行库，并验证干净机器上的加载路径」漏掉的一条。
+打包脚本已改为按 app-local 方式附带 `vcruntime140.dll` / `vcruntime140_1.dll` /
+`msvcp140.dll` / `d3dcompiler_47.dll`（缺必需项直接失败，不出残包）。
 
 macOS（15.8.3 / Intel）：`flutter build macos --debug/--release` 成功（.app 45.3 MB），
 `tool/package_release_macos.py` 产出 `dist/whalepet-macos-0.2.0.zip`（18.8 MiB）。
