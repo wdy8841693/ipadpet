@@ -11,6 +11,8 @@
 | 部分 | 版本 | 说明 |
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
+| Flutter 客户端（`Clients/whalepet_flutter/`） | **v0.3.0** | Android 全屏场景 + Windows 桌宠，共用 `lib/core/`，走 `/api/agent` 文本协议 |
+| 原生 Java 原型（`Android/`） | v1.3.0-android.1 | 用 SurfaceView + Canvas 手写的第一版 Android App，保留作参考/对比 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.1** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
 
 ![预览](docs/preview.png)
@@ -27,6 +29,16 @@ ipadpet/
 │   ├── Support/              #   AppDelegate / ViewController / 服务器设置（Keychain）
 │   └── Resources.xcassets/   #   立绘与图标（来自上游 MIT 素材）
 ├── WhalePetTests/            # 纯逻辑 XCTest（状态机/数值/存档/配置校验）
+├── Clients/whalepet_flutter/ # 跨平台客户端（Flutter）：Android 全屏 + Windows 桌宠
+│   ├── lib/core/             #   纯 Dart 共享核心：宠物/存档/协议/语音状态机
+│   ├── lib/ui/mobile_scene/  #   Android 场景（海底背景、立绘、操作栏、面板）
+│   ├── lib/ui/desktop_pet/   #   Windows 透明桌宠场景
+│   ├── lib/platform/         #   平台适配层（Android 通道 / Win32 FFI / 系统 TTS）
+│   ├── android/              #   Android runner + Kotlin 原生桥（识别/TTS/Keystore）
+│   └── tool/build_android.sh #   打包脚本（本地目录构建，产物进 dist/）
+├── Android/                  # 原生 Java 原型（不依赖 Flutter，保留参考）
+│   ├── app/src/main/java/    #   MainActivity + pet/net/voice/ui 四个包
+│   └── build-apk.sh          #   aapt2 + javac + d8 + apksigner 手工打包
 ├── Plugin/
 │   └── whalepet-dsh-bridge/  # DSH 插件（Host 网关 + 浏览器设置页，零第三方依赖）
 │       ├── index.js          #   插件入口：会话/人格/权限/任务提醒
@@ -119,6 +131,25 @@ Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）�
 
 点「保存并测试」，提示「连接成功」即可说「小鲸小鲸」。
 
+### 3. Android 侧（Flutter 客户端，推荐）
+
+```bash
+cd Clients/whalepet_flutter
+export ANDROID_HOME=<Android SDK>
+bash tool/build_android.sh      # → dist/whalepet-android-0.3.0-release.apk
+adb install -r dist/whalepet-android-0.3.0-release.apk
+```
+
+需要 Flutter 3.50 + Android SDK platform 36 / build-tools 36 + JDK 17。
+装好后点底部 **⚙️ 设置** 填服务器地址与令牌；点 **🎙️ 说话** 说指令，回答由系统 TTS 播报。
+立绘、状态机、台词、`/api/agent` 协议与桌面端完全共用 `lib/core/`。
+
+> 工程在网络盘上时必须用上面的脚本（会先复制到本地再构建）——
+> Windows 版 `flutter`/`gradle` 的 `.bat` 不接受 UNC 路径作为工作目录。
+
+细节见 [Clients/whalepet_flutter/README.md](Clients/whalepet_flutter/README.md)。
+另有早期手写的原生 Java 版（`Android/`，不依赖 Flutter），构建方式见 [Android/README.md](Android/README.md)。
+
 ## 配置（插件）
 
 见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)，常用项：
@@ -193,6 +224,7 @@ pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-a
 
 | 版本 | 内容 |
 |---|---|
+| v1.3.0-android.1 | 新增 Android 版（`Android/`）：SurfaceView + Canvas 渲染、AudioRecord 16k 采集、系统 TTS、OkHttp WebSocket，行为/数值/台词/协议与 iPad 版一致 |
 | v1.2.6 | 前台任务提醒全部改为语音播报（开始/需要授权/断线恢复/失败；完成由回答本身播报） |
 | v1.2.5 | 重连放弃阈值（连续 10 次≈3 分钟后转错误态，点麦克风可重试） |
 | v1.2.4 | 断线期间完成的任务在重连后补播；新增 `task interrupted` 态 |

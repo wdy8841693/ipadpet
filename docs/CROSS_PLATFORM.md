@@ -1167,3 +1167,33 @@ whalepet-main
 - Apple `supportsOnDeviceRecognition`：https://developer.apple.com/documentation/speech/sfspeechrecognizer/supportsondevicerecognition
 - Android `SpeechRecognizer`：https://developer.android.com/reference/android/speech/SpeechRecognizer
 - Flutter 桌面窗口基础能力可参考 `window_manager`，但本项目仍需保留原生 `DesktopWindowAdapter`，不能只依赖插件默认行为。
+
+---
+
+## 17. 实现状态（2026-11-16）
+
+本节记录代码与本文档的对应关系，方便判断「哪些是设计、哪些已经跑起来了」。
+
+| 章节 / 阶段 | 状态 | 代码位置 |
+|---|---|---|
+| §6.1 状态模型、§6.2 数值规则 | ✅ 已实现，纯 Dart + 单测 | `Clients/whalepet_flutter/lib/core/pet/` |
+| §6.3 移动端场景（全屏、单 Ticker、坐标内移动） | ✅ 已实现 | `lib/ui/mobile_scene/mobile_pet_runtime.dart`、`mobile_shell.dart` |
+| §6.3 桌面端「窗口即宠物」 | ✅ Windows 已实现 | `lib/ui/desktop_pet/`、`lib/platform/desktop_window/win32_window.dart` |
+| §7.1 协调器 + 适配器拆分 | ✅ | `lib/core/voice/voice_session_coordinator.dart` |
+| §7.5 `VoiceEngineAdapter` / `SpeechOutputAdapter` | ✅ 双端各一套实现 | `lib/platform/voice/*`、`lib/platform/speech_output/*` |
+| §7.6 KWS 低功耗守门 | ⚠️ Android 暂用「连续系统识别 + 唤醒词文本匹配」（默认关） | `lib/platform/voice/android_system_voice_engine.dart` |
+| §7.9 sherpa-onnx 本地模型 | ⏳ 未做；`VoiceEngineAdapter` 已留替换位 | — |
+| §7.10 模型下载与校验 | ⏳ 未做（当前不依赖模型） | — |
+| §8 `/api/agent` 文本通道（hello/command/task/response/announcement） | ✅ | `lib/core/agent/` |
+| §10.1 Android 前台全屏、退后台停采集、系统 TTS、Keystore 令牌 | ✅ | `android/app/src/main/kotlin/com/dywu/whalepet/` |
+| §10.3 Windows 透明置顶窗口、SAPI 识别与播报 | ✅ | `lib/platform/` |
+| §11.1 本地存档、§11.2 令牌安全存储 | ✅（Windows DPAPI / Android Keystore） | `lib/core/storage/`、`lib/platform/secure_storage/` |
+| §11.3 语音配置 revision 重建 | ✅ | `voice_session_coordinator.dart` |
+| §12 测试 | ✅ 89 个纯 Dart 测试（核心/协议/协调器） | `test/core/` |
+| §13 阶段 C 第 1~2 步（系统 TTS、点击采集 + 识别 + 播报闭环） | ✅ | 本轮交付 |
+| §13 阶段 C 第 3~5 步（sherpa KWS、音频焦点细化、模型管理） | ⏳ | 未开始 |
+| §13 阶段 D（macOS） | ⏳ | 未开始 |
+
+一句话总结：**「Android 全屏场景 + 系统语音 + DSH 文本通道」这条垂直闭环已经通了，
+但「本地 KWS + 本地 ASR 模型」还是系统识别顶着的过渡方案**，接 sherpa-onnx 时只换
+`VoiceEngineAdapter` 实现即可，协调器与 UI 不动。

@@ -1,14 +1,31 @@
 name: whalepet_flutter
 description: >-
-  WhalePet 跨平台客户端核心（阶段 B）：宠物状态、数值衰减、行为调度与本地存档。
-  本包是**纯 Dart**，不依赖 Flutter SDK，便于三端共享与单元测试。
-version: 0.1.0
+  WhalePet 跨平台客户端：纯 Dart 宠物核心（状态、数值、行为、存档）+
+  Android 全屏场景（阶段 C，系统语音识别与系统 TTS）+
+  Windows 桌宠壳（阶段 E，透明置顶窗口、系统 TTS）。
+version: 0.3.0+1
 publish_to: none
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.19.0'
 
-# 阶段 B 只交付纯 Dart 核心，因此不引入 flutter 依赖；
-# 后续阶段 C~E（UI / 原生适配 / 语音引擎）再在本工程内追加 Flutter 壳。
+dependencies:
+  flutter:
+    sdk: flutter
+  # Dart 官方 FFI 分配器（calloc/malloc 等），纯 Dart 实现，不含原生代码。
+  ffi: ^2.1.3
+
+# 依赖策略（docs/CROSS_PLATFORM.md §3.3）：
+#   - 窗口、托盘、音频、TTS 一律走 platform 适配层，用 dart:ffi 直连系统 API，
+#     不引第三方窗口插件（行为黑盒 + 维护风险），和插件的「零第三方依赖」保持一致；
+#   - core/ 保持纯 Dart（只依赖 dart:*），可以脱离 Flutter 直接 `dart test`。
 dev_dependencies:
   test: ^1.25.0
+  flutter_lints: ^6.0.0
+
+flutter:
+  # 需要 Material 图标字体（菜单/面板里的 Icons.*）
+  uses-material-design: true
+  assets:
+    - assets/pet/

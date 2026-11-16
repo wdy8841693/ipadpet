@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../config/atomic_file.dart';
 import 'pet_save.dart';
 
 /// 宠物存档的本地持久化。
@@ -43,11 +44,12 @@ class PetSaveStore {
   }
 
   /// 原子写入存档。
+  ///
+  /// Windows 上 `File.rename` 在目标已存在时会失败（POSIX 是原子替换），
+  /// 所以统一走 [writeFileAtomically] 处理这个平台差异。
   Future<void> save(PetSave save) async {
     await directory.create(recursive: true);
-    final File temp = File('${file.path}.tmp');
-    await temp.writeAsString(save.encode(), flush: true);
-    await temp.rename(file.path);
+    await writeFileAtomically(file, save.encode());
   }
 
   /// 删除存档文件（不含备份）。
