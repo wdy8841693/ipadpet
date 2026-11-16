@@ -2,8 +2,9 @@ name: whalepet_flutter
 description: >-
   WhalePet 跨平台客户端：纯 Dart 宠物核心（状态、数值、行为、存档）+
   Android 全屏场景（阶段 C，系统语音识别与系统 TTS）+
-  Windows 桌宠壳（阶段 E，透明置顶窗口、系统 TTS）。
-version: 0.3.0+1
+  Windows 桌宠壳（阶段 E，透明置顶窗口、SAPI 离线语音与系统 TTS）+
+  macOS 桌宠壳（阶段 D 文字版，AppKit 透明窗口 + AVSpeechSynthesizer）。
+version: 0.3.1+2
 publish_to: none
 
 environment:

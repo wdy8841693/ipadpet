@@ -1,4 +1,4 @@
-# WhalePet Flutter 客户端（Android 全屏 + Windows 桌宠）
+# WhalePet Flutter 客户端（Android 全屏 + Windows / macOS 桌宠）
 
 跨平台客户端工程：**同一份 `lib/core/`**，两套场景控制器（§6.3）。
 
@@ -8,9 +8,10 @@
 | `lib/ui/mobile_scene/`（Android 全屏场景） | ✅ 阶段 C 1~2 步 | 海底场景、立绘位移/拖拽/点击、状态条、操作栏、聊天/设置浮层 |
 | `lib/platform/android/`、`speech_output/android_*`、`secure_storage/` | ✅ Android | MethodChannel + 系统 SpeechRecognizer / TextToSpeech / Keystore |
 | `lib/platform/`（Win32 窗口、SAPI 离线 KWS/ASR、TTS） | ✅ Windows | `dart:ffi` + 系统 API，零第三方插件 |
-| `lib/ui/desktop_pet/`（透明桌宠界面） | ✅ Windows | 气泡、立绘、聊天/设置面板、右键菜单 |
+| `lib/ui/desktop_pet/`（透明桌宠界面） | ✅ Windows / macOS | 气泡、立绘、聊天/设置面板、右键菜单 |
+| `lib/platform/desktop_window/macos_window.dart`、`speech_output/macos_speech.dart` | ✅ macOS（阶段 D 文字版） | MethodChannel `whalepet/window` → 原生 AppKit；`AVSpeechSynthesizer` 播报 |
 | 本地语音（唤醒 → 识别 → 文本 → TTS） | ✅ 双端 | Android 用系统识别服务；Windows 用 SAPI 离线识别 |
-| 一句话带命令（§7.7）、sherpa-onnx 本地模型、AEC/barge-in、macOS | ⏳ | 后续增强 |
+| 一句话带命令（§7.7）、sherpa-onnx 本地模型、AEC/barge-in、macOS 本地唤醒 | ⏳ | 后续增强 |
 
 设计依据：[`docs/CROSS_PLATFORM.md`](../../../docs/CROSS_PLATFORM.md) §6（宠物核心）、§7（语音）、§8（`/api/agent`）、§10.3（Windows）、§11（存档与安全）、§12（测试）。
 
@@ -33,13 +34,16 @@ Clients/whalepet_flutter/
 │   │   ├── speech_output/android_system_tts.dart   # 系统 TextToSpeech
 │   │   ├── secure_storage/keystore_token_store.dart# Android Keystore 加密令牌
 │   │   ├── desktop_window/win32_window.dart        # Win32 FFI：透明/置顶/穿透/拖拽/DPI/工作区
+│   │   ├── desktop_window/macos_window.dart        # macOS：MethodChannel → AppKit 窗口/穿透/拖拽
 │   │   ├── speech_output/powershell_speech.dart    # 常驻子进程 + System.Speech 合成
+│   │   ├── speech_output/macos_speech.dart         # AVSpeechSynthesizer（zh-CN）
 │   │   └── voice/sapi_voice_engine.dart            # 常驻子进程 + 离线桌面识别（KWS/听写）
 │   ├── ui/mobile_scene/                            # Android 全屏场景：runtime + shell
 │   └── ui/desktop_pet/                             # runtime、宠物、气泡、聊天/设置面板、菜单
 ├── android/                                        # Flutter Android runner + 原生能力桥（Kotlin）
 ├── assets/pet/                                     # 立绘（与 iOS 工程同一套素材）
 ├── windows/                                        # Flutter Windows runner（桌宠窗口）
+├── macos/                                          # Flutter macOS runner（AppKit 透明窗口 + 菜单栏项）
 ├── test/core/                                      # 纯 Dart 测试
 └── tool/                                           # 开发/打包脚本
 ```
@@ -84,6 +88,21 @@ dart test
 dart analyze
 ```
 
+## 构建 / 运行（macOS）
+
+前置：Xcode（验证版本 26.3）+ Flutter SDK（验证版本 3.50.0；Intel Mac 可用，但官方已提示后续弃用）。
+
+```bash
+cd Clients/whalepet_flutter
+flutter pub get
+flutter run -d macos                     # 调试
+flutter build macos --release            # 产物：build/macos/Build/Products/Release/
+python3 tool/package_release_macos.py    # 打包成 dist/whalepet-macos-<ver>.zip
+```
+
+工程默认关闭 Swift Package Manager（零插件用不上，开着会让 `xcodebuild` 卡在依赖解析）；
+需要时 `flutter config --enable-swift-package-manager` 后重建 `macos/`。
+
 ## 使用
 
 启动后是一个 **380×560 的透明置顶窗口**，里面只有宠物和气泡：
@@ -100,7 +119,34 @@ dart analyze
 
 - 服务器地址：`http://<运行 DSH 的机器 IP>:8787`
 - 访问令牌：`~/.dsh/whalepet/ipad-token` 的内容
-- 语音：勾「开启唤醒词常驻侦听」，可改唤醒词、别名（逗号分隔）、唤醒应答
+- 语音：勾「开启唤醒词常驻侦听」，可改唤醒词、别名（逗号分隔）、唤醒应答（唤醒/听写是 Windows 能力；macOS v1 只支持文字对话 + 系统 TTS）
+
+## macOS 平台差异
+
+窗口同样是 **380×560 透明置顶小窗**，但能力落在原生 AppKit（`macos/Runner/AppDelegate.swift`）：
+
+| 项 | Windows | macOS |
+|---|---|---|
+| 窗口能力 | `dart:ffi` 直调 user32 | MethodChannel `whalepet/window` → 原生 AppKit |
+| 透明/无边框 | `WS_EX_LAYERED` + `SetLayeredWindowAttributes` | `isOpaque=false` + 背景 clear + 去掉 `.titled` |
+| 置顶 | `HWND_TOPMOST` | `window.level = .floating`（+ 常驻所有空间） |
+| 不进任务栏/Dock | `WS_EX_TOOLWINDOW` | `LSUIElement` + `setActivationPolicy(.accessory)` |
+| 托盘/菜单栏 | 右键菜单（无托盘图标） | 菜单栏 🐳 状态项：显示 / 退出 |
+| 鼠标穿透 | `WS_EX_TRANSPARENT` | `window.ignoresMouseEvents` |
+| 原生拖拽 | `WM_NCLBUTTONDOWN` + `HTCAPTION` | `performDrag(with:)` |
+| 工作区 | `MonitorFromWindow` + `SPI_GETWORKAREA` | `screen.visibleFrame`（自动避开刘海/菜单栏/Dock） |
+| 全局光标 | `GetCursorPos` | CoreGraphics `CGEventCreate` + `CGEventGetLocation`（FFI，同步） |
+| 系统 TTS | SAPI5（`System.Speech`） | `AVSpeechSynthesizer`（zh-CN） |
+| 令牌存储 | DPAPI 密文 | `~/.whalepet/token.bin` 明文 + 0600（待换 Keychain） |
+| 本地唤醒/识别 | SAPI5 离线识别器 | ⏳ 未接（v1 只支持文字对话） |
+
+**为什么令牌先明文**：同机 `~/.dsh/whalepet/ipad-token` 本来就是 0600 明文，威胁模型一致；
+后续换 Keychain（`SecItemAdd`）后再打开 App Sandbox。
+
+**一个 macOS 独有的坑**：`FlutterAppDelegate` 的 `applicationDidFinishLaunching`
+只在协议里声明，Swift 重写**不会**挂到 `applicationDidFinishLaunching:` 这个 ObjC 入口上
+（实测：通知照发、方法不被调用，`MissingPluginException` 由此而来）。
+初始化必须放在 `applicationWillFinishLaunching`，此时 nib 已加载完、窗口与引擎都已就绪。
 
 ## 本地语音链路
 
@@ -136,6 +182,23 @@ dart run tool/verify_tts.dart                  # 验证连续两条播报
 
 设置 `WHALEPET_VOICE_DEBUG=1` 会打印引擎的原始 stdout 与发送的命令。
 
+## 开发自检钩子（无需点界面）
+
+```bash
+# Windows：用 WAV 代替麦克风跑完整语音闭环
+WHALEPET_VOICE_WAV=<wav> WHALEPET_VOICE_DEBUG=1 ./build/windows/x64/runner/Release/whalepet_flutter.exe
+
+# macOS：验证播报通道 / 自动发一条文本命令
+WHALEPET_SPEAK_TEST=1 ./build/macos/Build/Products/Release/whalepet_flutter.app/Contents/MacOS/whalepet_flutter
+WHALEPET_CHAT_TEST="帮我看看今天的安排"  # 同上，启动 3 秒后自动发一条文本命令
+
+# 桌面端通用：启动 3 秒后自动发一条文本命令
+WHALEPET_CHAT_TEST="查一下明天的安排" ./build/windows/x64/runner/Release/whalepet_flutter.exe
+
+# 后端联调用最小 mock（protocol v2）：health + hello→ready + command→task/response
+node tool/mock_agent_server.js   # 需要 npm i ws；端口 8799，令牌 mock-token
+```
+
 ## 数据落在哪
 
 ```text
@@ -145,6 +208,8 @@ dart run tool/verify_tts.dart                  # 验证连续两条播报
 ├── client_id.txt      # 本机客户端 id，服务端据此单播回答
 └── save\pet_save.json # 数值存档（schema v1，原子写，坏档先备份再回落默认值）
 ```
+
+macOS 同构，根目录是 `~/.whalepet/`；令牌先明文 0600（见上「macOS 平台差异」）。
 
 ## 与架构文档的对应
 
@@ -159,6 +224,8 @@ dart run tool/verify_tts.dart                  # 验证连续两条播报
 | §8 全部协议字段 | `core/agent/`，含 `event_id` 去重、补发、退避、401/403 不重试 |
 | §11.2 令牌安全存储 | DPAPI（`CryptProtectData` + 应用附加熵） |
 | §11.3 voice_config 版本 | revision 变化在「等待唤醒」安全点重建 KWS 语法 |
+| §6.3 macOS「窗口即宠物」 | `MacOSDesktopWindow` + `macos/Runner/AppDelegate.swift`（AppKit 透明置顶） |
+| §10.3 macOS 系统 TTS | `MacOSSpeechOutput`（`AVSpeechSynthesizer`，zh-CN） |
 
 ## 与文档原设计的偏差
 
@@ -172,6 +239,8 @@ dart run tool/verify_tts.dart                  # 验证连续两条播报
 | §7.9 Android 用 sherpa-onnx 本地 KWS/ASR | 先用系统 `SpeechRecognizer`（阶段 C 第 2 步） | 不塞模型先打通「说话→执行→播报」；`VoiceEngineAdapter` 已留好替换位 |
 | §7.6 KWS 是低功耗守门器 | 常驻模式用「连续识别 + 唤醒词文本匹配」（默认关） | 系统识别没有关键字语法；耗电/延迟不如真 KWS，故做成可选开关 |
 | §10.1 令牌用 Keystore | 已实现（AES-GCM + Android Keystore） | 与文档一致 |
+| §5 macOS 允许用插件 | 窗口/语音走一条自建 MethodChannel + 系统框架 | 只依赖 AppKit/AVFoundation，不引第三方插件 |
+| §11.2 macOS 令牌加密 | 先 0600 明文落盘，后续换 Keychain | 与同机 `~/.dsh` 令牌的威胁模型一致，先跑通再收紧 |
 
 ## Windows 子进程通信的一个坑
 
@@ -229,3 +298,29 @@ UI 真机确认：透明窗浮于壁纸（无黑框）、单击摸头、双击�
 
 开发环境注意：本机**没有默认录音设备**，所以麦克风实时链路用 WAV 输入验证；接上麦克风后
 在设置里打开唤醒即可用。引擎实例退出时会注销事件订阅，避免遗留宿主进程。
+
+## 验证记录（macOS 15.8.3 / Intel，2026-11-16）
+
+```text
+dart test                            → 89 个测试全绿
+flutter analyze                      → 0 error / 0 warning（仅 tool/ 脚本的 info 级提示）
+flutter build macos --debug          → 成功
+flutter build macos --release        → 成功（45.3 MB .app）
+python3 tool/package_release_macos.py → dist/whalepet-macos-0.2.0.zip（18.8 MiB）
+```
+
+真机确认（逐项截图核对）：
+
+| 项 | 结果 |
+|---|---|
+| 透明悬浮 | 立绘浮在桌面上，周围像素完全透明，无黑底、无边框、无阴影 |
+| 不进 Dock / 不抢菜单栏 | 菜单栏归前台应用所有；`LSUIElement` + `.accessory` 生效 |
+| 菜单栏状态项 | 🐳 出现，菜单含「显示鲸鱼娘 / 退出鲸鱼娘…」 |
+| 桌宠移动 | 自主行为触发后窗口跟着走：`window_x` 530 → 1060、`window_y` 261 → 207（走 + 游） |
+| 握手 | mock 侧收到 `hello macos-mltidp`（客户端 id 前缀随平台为 `macos-`） |
+| 文本对话 | `command 帮我看看今天的安排` → `response` → 气泡「收到你的话：帮我看看今天的安排」 |
+| TTS | `WHALEPET_SPEAK_TEST=1`：`started` → `finished`（AVSpeechSynthesizer zh-CN） |
+| 存档 | `~/.whalepet/{settings.json,save/pet_save.json,client_id.txt}` 正常读写；退出前补写 |
+
+待手动确认（同一通道，逻辑共用，未做点击自动化）：单击摸头、双击聊天面板、右键菜单、
+按住拖拽、透明区域自动穿透。

@@ -11,7 +11,7 @@
 | 部分 | 版本 | 说明 |
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
-| Flutter 客户端（`Clients/whalepet_flutter/`） | **v0.3.0** | Android 全屏场景 + Windows 桌宠，共用 `lib/core/`，走 `/api/agent` 文本协议 |
+| Flutter 客户端（`Clients/whalepet_flutter/`） | **v0.3.1** | Android 全屏 + Windows / macOS 桌宠，共用 `lib/core/`，走 `/api/agent` 文本协议 |
 | 原生 Java 原型（`Android/`） | v1.3.0-android.1 | 用 SurfaceView + Canvas 手写的第一版 Android App，保留作参考/对比 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.1** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
 
@@ -29,13 +29,15 @@ ipadpet/
 │   ├── Support/              #   AppDelegate / ViewController / 服务器设置（Keychain）
 │   └── Resources.xcassets/   #   立绘与图标（来自上游 MIT 素材）
 ├── WhalePetTests/            # 纯逻辑 XCTest（状态机/数值/存档/配置校验）
-├── Clients/whalepet_flutter/ # 跨平台客户端（Flutter）：Android 全屏 + Windows 桌宠
+├── Clients/whalepet_flutter/ # 跨平台客户端（Flutter）：Android 全屏 + Windows / macOS 桌宠
 │   ├── lib/core/             #   纯 Dart 共享核心：宠物/存档/协议/语音状态机
 │   ├── lib/ui/mobile_scene/  #   Android 场景（海底背景、立绘、操作栏、面板）
-│   ├── lib/ui/desktop_pet/   #   Windows 透明桌宠场景
-│   ├── lib/platform/         #   平台适配层（Android 通道 / Win32 FFI / 系统 TTS）
+│   ├── lib/ui/desktop_pet/   #   桌面透明桌宠场景（Windows / macOS）
+│   ├── lib/platform/         #   平台适配层（Android 通道 / Win32 FFI / AppKit 通道 / 系统 TTS）
 │   ├── android/              #   Android runner + Kotlin 原生桥（识别/TTS/Keystore）
-│   └── tool/build_android.sh #   打包脚本（本地目录构建，产物进 dist/）
+│   ├── windows/              #   Windows runner（无边框 + 分层 + 置顶）
+│   ├── macos/                #   macOS runner（AppKit 透明窗口 + 菜单栏状态项）
+│   └── tool/                 #   打包/验证脚本（Android、Windows、macOS 各一套）
 ├── Android/                  # 原生 Java 原型（不依赖 Flutter，保留参考）
 │   ├── app/src/main/java/    #   MainActivity + pet/net/voice/ui 四个包
 │   └── build-apk.sh          #   aapt2 + javac + d8 + apksigner 手工打包
@@ -82,6 +84,7 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──�
 | 语音唤醒 | 说「**小鲸小鲸**」唤醒，宠物答一句「我在」，接着说指令；也支持一句话带命令 |
 | 设置界面 | DSH 设置 → 「鲸鱼娘」：改人设、唤醒词/应答、其它会话播报、完成播报字数，附 iPad 连接地址与令牌 |
 | 跨平台通道 | 新增 `/api/agent` 纯文本通道（protocol v2：幂等 request_id、断线补发、多客户端隔离），旧 `/api/audio` 保持不变 |
+| 跨平台客户端 | Flutter 三端共用 `lib/core/`：Android 全屏场景（系统识别/TTS）、Windows 桌宠（SAPI 离线唤醒+听写）、macOS 桌宠（文字版 + AVSpeechSynthesizer） |
 | 真 Agent | 宠物会话是完整的 DSH Agent：联网检索、读文件、跑命令、多步执行（默认权限 `workspace-write`） |
 | 设置页 | DSH「设置 → 鲸鱼娘」可改人设/唤醒词/播报；保存立即生效（写 `~/.dsh/whalepet/settings.json`）；页面里直接给出 iPad 连接地址与令牌 |
 | 任务提醒 | 前台时宠物用**语音播报**：宠物自己的任务（开始/授权/断线恢复/失败）**以及其它 DSH 会话的任务**（开始/完成/授权）都会报一句；断线期间完成的任务重连后补播 |
@@ -149,6 +152,55 @@ adb install -r dist/whalepet-android-0.3.0-release.apk
 
 细节见 [Clients/whalepet_flutter/README.md](Clients/whalepet_flutter/README.md)。
 另有早期手写的原生 Java 版（`Android/`，不依赖 Flutter），构建方式见 [Android/README.md](Android/README.md)。
+
+### 4. Windows 桌宠（`Clients/whalepet_flutter/`）
+
+前置：Windows 10/11 x64 + Flutter SDK + Visual Studio 2022 生成工具的 **C++ 桌面开发**组件
+（MSVC + CMake + Windows SDK，缺一个都会 `flutter doctor` 报 incomplete）。
+
+```bash
+cd Clients/whalepet_flutter
+flutter pub get
+flutter run -d windows                       # 调试
+flutter build windows --release              # Release
+python tool/package_release.py --no-build    # dist/whalepet-windows-x64-<version>.zip
+```
+
+启动后是一个 380×560 的**透明置顶窗口**，里面只有宠物和气泡：单击摸头、双击聊天、
+右键菜单（摸头/投喂/玩/语音开关/点击说话/设置/睡觉/重连/退出）、按住拖动整窗移动；
+鼠标移到透明区域自动穿透，不挡后面软件的点击。第一次用先右键 →「设置」，
+填服务器地址（`http://<DSH 机器 IP>:8787`）与 `~/.dsh/whalepet/ipad-token` 的内容。
+
+本地语音（全离线，零模型下载）：待机只用 SAPI5 中文桌面识别器跑「唤醒词小语法」，
+说「小鲸小鲸」后播「我在」并切到听写语法，识别成文本后上行；播报期间自动闭麦。
+没有麦克风也可以用 `WHALEPET_VOICE_WAV=<wav>` 注入音频跑通全链路。
+数据在 `%APPDATA%\WhalePet\`：设置明文、令牌 DPAPI 加密、宠物存档原子写。
+
+### 5. macOS 桌宠（`Clients/whalepet_flutter/`）
+
+前置：macOS 13+（Intel / Apple Silicon 均可）+ Xcode + Flutter SDK。
+
+```bash
+cd Clients/whalepet_flutter
+flutter pub get
+flutter run -d macos                              # 调试
+flutter build macos --release                     # Release
+python3 tool/package_release_macos.py --no-build  # dist/whalepet-macos-<version>.zip
+```
+
+同样是 380×560 的**透明置顶小窗**，窗口能力交给原生 AppKit（`macos/Runner`）：
+
+- 不进 Dock、不抢菜单栏，菜单栏常驻 🐳 状态项（显示 / 退出），退出前自动落盘；
+- 常驻所有空间（含全屏应用之上）；走路/游泳时窗口跟着宠物移动，自动夹在显示器工作区内；
+- 鼠标移到透明区域自动穿透（`ignoresMouseEvents`）；
+- 交互与 Windows 完全一致：单击摸头、双击聊天、右键菜单、按住拖动。
+
+**v1 能力边界**：文字对话（`/api/agent`）+ 系统 TTS（AVSpeechSynthesizer zh-CN）已通；
+本地唤醒词与语音识别未接（设置里语音入口显示「语音关闭」），留待下一阶段。
+令牌暂存 `~/.whalepet/token.bin` 明文 0600（同机 `ipad-token` 也是 0600 明文，
+威胁模型一致），Keychain 与公证待补。出包后首次运行需「右键 → 打开」绕过 Gatekeeper。
+
+细节见 [Clients/whalepet_flutter/README.md](Clients/whalepet_flutter/README.md)。
 
 ## 配置（插件）
 
@@ -218,7 +270,8 @@ pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-a
 - 语音只在 App 前台工作（iOS 不允许后台常驻麦克风）；后台时任务仍在服务器继续，回来可看会话；
 - 语音识别是**整段非流式**（SenseVoice 限制），按句切分后整句送识别；
 - VAD 是轻量能量检测（无原生依赖），安静室内够用，嘈杂环境可调 `vadFloorDbfs` / `vadMarginDb`；
-- 8787 是明文 HTTP + Bearer，仅用于内网/ZeroTier，**不要暴露公网**。
+- 8787 是明文 HTTP + Bearer，仅用于内网/ZeroTier，**不要暴露公网**；
+- macOS 客户端 v1 只支持文字对话（本地唤醒/识别未接），令牌暂为 0600 明文，未做公证。
 
 ## 版本历史
 
