@@ -1,0 +1,25 @@
+# 换行与二进制策略
+#
+# 背景（2026-11-16）：Windows 侧经 SMB 写过的文件到了 macOS 上会显示 77 个「已修改」，
+# 而 `git diff -w` 完全为空——纯 CRLF/LF 行尾噪声（7820 增 / 7820 删，每行只是多了 \r）。
+# 提交这种差异只会制造噪音，所以统一在此约定：
+#   - 文本一律以 LF 存储与检出；
+#   - Windows 专用脚本保持 CRLF（PowerShell 5.1 对纯 LF 的事件 Action 块解析有坑，
+#     见 Clients/whalepet_flutter/README.md 的「Windows 子进程通信」一节）；
+#   - 图片/压缩包按二进制处理，避免被误判成文本。
+
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.zip binary
+*.bundle binary
+*.dSYM binary
