@@ -190,8 +190,12 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
     case "initialize":
       let args = call.arguments as? [String: Any] ?? [:]
       let locale = (args["culture"] as? String) ?? "zh-CN"
+      // 唤醒词（主词 + 别名）：能转成 sherpa 关键词时，原生层会拉起本地 KWS
+      // 进程做真正的关键词检测；转不了就退回「系统识别 + 文本匹配」。
+      let wakePhrases = (args["wake_phrases"] as? [String]) ?? []
       engine.initialize(
         locale: locale,
+        wakePhrases: wakePhrases,
         eventSink: { [weak self] payload in
           self?.voiceChannel?.invokeMethod("event", arguments: payload)
         },

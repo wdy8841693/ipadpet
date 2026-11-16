@@ -55,10 +55,15 @@ class MacOSVoiceEngine implements VoiceEngineAdapter {
       final bool onDevice = info?['onDevice'] is bool
           ? info!['onDevice'] as bool
           : false;
+      // 唤醒是怎么判定的：「kws」= 本地关键词模型，「text-match」= 系统识别 + 文本匹配。
+      final String wakeProvider =
+          (info?['wakeProvider'] ?? 'text-match').toString();
+      final String wakeHint =
+          wakeProvider == 'kws' ? '本地唤醒词（sherpa-onnx）' : '唤醒词文本匹配';
       _emit(VoiceEngineReadyEvent(
         detail: onDevice
-            ? '$provider（本机识别）'
-            : '$provider（系统未提供本机识别，可能走 Apple 服务器）',
+            ? '$provider（本机识别 · $wakeHint）'
+            : '$provider（系统未提供本机识别，可能走 Apple 服务器 · $wakeHint）',
       ));
     } on PlatformException catch (error) {
       throw StateError(error.message ?? '语音引擎初始化失败');
@@ -146,6 +151,15 @@ class MacOSVoiceEngine implements VoiceEngineAdapter {
 
   RawVoiceEvent? _toRaw(String type, Map<dynamic, dynamic> args) {
     switch (type) {
+      case 'wake':
+        // 原生 KWS 的命中：sherpa-onnx 直接判定了唤醒词，比系统识别的文本
+        // 可靠得多，而且这个词是**完整说完**的（不是半句），所以按 final
+        // 上报——路由在待机阶段只认 final（§7.7.4 的整段 ASR 需要句尾判停）。
+        // 仍然交给路由按用户配置的唤醒词表复核，用户换了唤醒词时不会误触发。
+        return RawFinalEvent(
+          text: (args['keyword'] ?? '').toString(),
+          confidence: (args['confidence'] as num?)?.toDouble() ?? 0.9,
+        );
       case 'partial':
         return RawPartialEvent(text: (args['text'] ?? '').toString());
       case 'final':

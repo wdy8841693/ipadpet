@@ -60,7 +60,25 @@ Apache-2.0 要求保留版权与许可声明：jar 内已含各自 `META-INF/LIC
 这些是微软专有二进制，**不在本仓库 MIT 许可范围内**，仅按微软再发行条款随便携包分发；
 源码不随仓库提供。Flutter 引擎 `flutter_windows.dll` 为 BSD-3-Clause（Flutter 项目）。
 
-## 3. 运行时框架与库依赖（不随仓库分发源码）
+## 3. macOS 本地唤醒词载荷（sherpa-onnx + ONNX Runtime）
+
+macOS 客户端的「真 KWS」用 sherpa-onnx 做本地关键词检测。载荷**不入库**，
+由 `Clients/whalepet_flutter/tool/fetch_sherpa_onnx.sh` 在出包时从官方 release 拉取，
+装进 App 包的 `Contents/Resources/kws/`：
+
+| 组件 | 项目 | 许可证 |
+|---|---|---|
+| `libsherpa-onnx-c-api.dylib` | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) v2.0.1 | Apache-2.0 |
+| `libonnxruntime.dylib` | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) | MIT |
+| `encoder/decoder/joiner-*.onnx` | [sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01](https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models) | Apache-2.0 |
+
+- 动态库与模型均为**未修改**的官方产物；仓库只保留下载脚本与关键词表。
+- Apache-2.0 / MIT 都要求保留版权与许可声明：官方二进制内已含各自声明，
+  出包脚本对它做 ad-hoc 签名（macOS 要求 App 签名后加载的库也有签名）。
+- 模型只用于「检测用户说了唤醒词」，不用于身份识别，也不把音频送出本机。
+- 不想带这份载荷时，出包加 `--no-kws` 即可，唤醒会退回「系统识别 + 文本匹配」。
+
+## 4. 运行时框架与库依赖（不随仓库分发源码）
 
 - **[Flutter / Dart SDK](https://github.com/flutter/flutter)**（BSD-3-Clause）：跨平台客户端
   （`Clients/whalepet_flutter/`）的 UI 框架与语言运行时，由使用者本机安装。
@@ -70,14 +88,14 @@ Apache-2.0 要求保留版权与许可声明：jar 内已含各自 `META-INF/LIC
   Android/iOS 系统识别与 TTS——操作系统自带能力，非第三方代码。
 - 开发期工具：`test`（BSD-3-Clause）、`flutter_lints`（BSD-3-Clause），仅测试/静态检查用。
 
-## 4. 设计思路参考（未使用其代码/素材）
+## 5. 设计思路参考（未使用其代码/素材）
 
 - [VPet-Simulator](https://github.com/LorisYounger/VPet)（Apache-2.0；默认动画另有 VUP 团队版权条款）：状态机+数值+互动架构思路。
 - [Shijima / libshijima](https://github.com/pixelomer/Shijima-Qt)（GPL-3.0）：Shimeji 行为划分思路。
 - [N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O)（Apache-2.0）：主动陪伴交互启发。
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT）：宿主平台，插件仅调用其公开 Host API，未复制源码。
 
-## 5. 本仓库原创部分
+## 6. 本仓库原创部分
 
 - 全部 Swift 代码（状态机/数值/持久化/场景/HUD/台词）
 - 全部 Dart 代码（`lib/core/` 宠物核心 + 三端 platform 适配层）与插件 JS 代码

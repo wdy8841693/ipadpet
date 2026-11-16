@@ -13,6 +13,11 @@ Flutter 三端客户端（Android / Windows / macOS）共用。
 
 - **[OkHttp](https://github.com/square/okhttp) 3.12.13 + [Okio](https://github.com/square/okio) 1.17.6**（Apache-2.0）：
   仅 Android 原生 Java 原型（`Android/libs/` 两个 jar）的 WebSocket 实现；jar 内自带许可声明，未修改。
+- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) v2.0.1**（Apache-2.0）+
+  **[ONNX Runtime](https://github.com/microsoft/onnxruntime)**（MIT）：
+  macOS 客户端的本地唤醒词检测（KWS）。载荷不入库，由
+  `Clients/whalepet_flutter/tool/fetch_sherpa_onnx.sh` 在出包时拉取官方产物，
+  装进 App 包的 `Contents/Resources/kws/`；二进制与模型均未修改。
 - **[Flutter / Dart](https://github.com/flutter/flutter)**（BSD-3-Clause）与
   **[ffi](https://github.com/dart-lang/native/tree/main/pkgs/ffi)**（BSD-3-Clause）：
   跨平台客户端的框架与 FFI 辅助库，由使用者本机安装/pub 拉取，不随仓库分发源码。

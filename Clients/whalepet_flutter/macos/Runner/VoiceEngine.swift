@@ -47,9 +47,17 @@ final class WhalePetVoiceEngine {
     let provider: String
     /// 系统是否提供本机识别；false 时可能悄悄走 Apple 服务器。
     let onDevice: Bool
+    /// 唤醒是怎么判定的：
+    ///   - `kws`：本地关键词模型（sherpa-onnx）直接判唤醒，不跑整段识别；
+    ///   - `text-match`：退回「系统识别 + 唤醒词文本匹配」。
+    let wakeProvider: String
 
     var asDictionary: [String: Any] {
-      return ["provider": provider, "onDevice": onDevice]
+      return [
+        "provider": provider,
+        "onDevice": onDevice,
+        "wakeProvider": wakeProvider,
+      ]
     }
   }
 
@@ -88,6 +96,19 @@ final class WhalePetVoiceEngine {
   private var mode: Mode = .idle
   private var supportsOnDevice = false
 
+  /// 这一轮要监听的唤醒词（主词 + 别名）。
+  private var wakePhrases: [String] = []
+
+  /// 本地唤醒词进程（sherpa-onnx KWS）。
+  ///
+  /// 为 nil 表示这台机器没有 KWS 载荷（没跑过 `tool/fetch_sherpa_onnx.sh`、
+  /// 或出包时没带上），或者配置的唤醒词不在拼音表里 → 这两种情况都退回
+  /// 「系统识别 + 文本匹配唤醒」。
+  private var kws: WhalePetKWS?
+
+  /// 是否走真 KWS 路径（待机期只跑关键词模型，不跑整段识别）。
+  private var kwsEnabled = false
+
   /// tap 是否真的装上了：没装过就不能 removeTap（会抛异常）。
   private var tapInstalled = false
 
@@ -115,11 +136,17 @@ final class WhalePetVoiceEngine {
   /// 权限是异步的：语音识别走 `SFSpeechRecognizer.requestAuthorization`，
   /// 麦克风走 `AVCaptureDevice.requestAccess(for: .audio)`。两者都通过
   /// `completion` 回结果（失败时带可读的本地化原因）。
+  ///
+  /// [wakePhrases] 是这一轮要监听的唤醒词（主词 + 别名）：如果它们能转成
+  /// sherpa 关键词（见 `WhalePetWakeKeywords`），就额外拉起本地 KWS 进程，
+  /// 待机期用真正的关键词检测代替「常驻识别 + 文本匹配」。
   func initialize(locale: String,
+                  wakePhrases: [String],
                   eventSink: @escaping EventSink,
                   completion: @escaping (Result<InitInfo, Error>) -> Void) {
     localeIdentifier = locale
     self.eventSink = eventSink
+    self.wakePhrases = wakePhrases
     // 重建引擎时（唤醒词变了）可能还留着上一轮的采集，先收干净。
     stopRecognition()
 
@@ -174,11 +201,75 @@ final class WhalePetVoiceEngine {
     self.recognizer = recognizer
     // supportsOnDeviceRecognition：macOS 10.15+ 才有；本工程部署目标是 12.0。
     supportsOnDevice = recognizer.supportsOnDeviceRecognition
-    let info = InitInfo(provider: "apple-speech/\(localeIdentifier)", onDevice: supportsOnDevice)
+    prepareKWS()
+    let info = InitInfo(
+      provider: "apple-speech/\(localeIdentifier)",
+      onDevice: supportsOnDevice,
+      wakeProvider: kwsEnabled ? "kws" : "text-match"
+    )
     if debugEnabled {
-      print("[voice] initialized provider=\(info.provider) onDevice=\(info.onDevice)")
+      print("[voice] initialized provider=\(info.provider) onDevice=\(info.onDevice) wake=\(info.wakeProvider)")
     }
     completion(.success(info))
+  }
+
+  // MARK: - 本地唤醒词（sherpa-onnx KWS）
+
+  /// 拉起本地关键词检测进程。
+  ///
+  /// 拉不起来不是错误：唤醒方式会自动退回「系统识别 + 文本匹配」，功能还在，
+  /// 只是待机期更费电一点。所以这里不报错，只在引擎信息里标明用的是哪种。
+  private func prepareKWS() {
+    kws?.stop()
+    kws = nil
+    kwsEnabled = false
+
+    guard let keywordString = WhalePetWakeKeywords.keywordString(for: wakePhrases),
+      let configuration = WhalePetKWS.makeConfiguration(keywords: keywordString)
+    else {
+      if debugEnabled {
+        print("[voice] KWS 不可用（无载荷或唤醒词不在拼音表里），退回文本匹配")
+      }
+      return
+    }
+
+    let process = WhalePetKWS { [weak self] event in
+      guard let self else { return }
+      switch event {
+      case .ready:
+        if self.debugEnabled { print("[voice] KWS 进程就绪") }
+      case .wake(let keyword):
+        // 真 KWS 的命中是权威的：直接报唤醒事件，Dart 侧不再做文本匹配。
+        self.emit([
+          "type": "wake",
+          "mode": "wake",
+          "keyword": keyword,
+          "confidence": 0.9,
+        ])
+      case .failure(let message):
+        self.kwsEnabled = false
+        // KWS 进程没了：退回「系统识别 + 文本匹配」，别让唤醒彻底不可用。
+        // 用的是非致命错误码——Dart 侧在待机阶段会忽略它（§7.2）。
+        self.emit([
+          "type": "error",
+          "mode": "wake",
+          "code": "kws_unavailable",
+          "message": message,
+          "retryable": true,
+        ])
+        if self.mode == .wake {
+          try? self.start(mode: .wake)
+        }
+      }
+    }
+
+    if process.start(configuration: configuration) {
+      kws = process
+      kwsEnabled = true
+    } else {
+      kws = nil
+      kwsEnabled = false
+    }
   }
 
   // MARK: - 采集与识别
@@ -201,6 +292,9 @@ final class WhalePetVoiceEngine {
   /// 彻底释放。
   func dispose() {
     stopRecognition()
+    kws?.stop()
+    kws = nil
+    kwsEnabled = false
     eventSink = nil
     recognizer = nil
   }
@@ -209,6 +303,14 @@ final class WhalePetVoiceEngine {
     stopRecognition()
     guard let recognizer = recognizer else {
       throw EngineError.recognizerUnavailable(localeIdentifier)
+    }
+
+    // 待机期优先走真 KWS：只把音频喂给关键词模型，不跑整段识别。
+    // 这条路径下「唤醒」由声学模型直接判定，比「常驻识别 + 文本匹配」准得多，
+    // 也省电得多（不需要一直做语音识别）。
+    if next == .wake, kwsEnabled, let kws {
+      try startKeywordCapture(kws: kws)
+      return
     }
 
     let request = SFSpeechAudioBufferRecognitionRequest()
@@ -262,6 +364,51 @@ final class WhalePetVoiceEngine {
     }
     if debugEnabled {
       print("[voice] start mode=\(next.rawValue)")
+    }
+  }
+
+  /// 待机期只做关键词检测：采集 → 重采样成 16kHz 单声道 → 喂给 KWS 进程。
+  ///
+  /// 命中与否由 KWS 进程判定并回报，这里不做任何文本处理。
+  private func startKeywordCapture(kws: WhalePetKWS) throws {
+    // 没有输入设备时不要去碰 inputNode（无麦克风的机器上会抛异常）。
+    guard AVCaptureDevice.default(for: .audio) != nil else {
+      throw EngineError.noInputDevice
+    }
+
+    let inputNode = audioEngine.inputNode
+    let format = inputNode.outputFormat(forBus: 0)
+    guard format.sampleRate > 0, format.channelCount > 0 else {
+      throw EngineError.noInputDevice
+    }
+
+    // 重采样器只在采集线程里用，跟着 tap 闭包一起活到 tap 被摘掉为止。
+    let resampler = WhalePetAudioResampler(inputSampleRate: format.sampleRate)
+    // 切回待机先复位关键词流，清掉上一轮的残留状态（聆听期不喂音频，
+    // sherpa 的「静音自动复位」不会触发）。
+    kws.reset()
+    inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+      let samples = resampler.process(buffer: buffer)
+      if !samples.isEmpty {
+        kws.feed(samples: samples)
+      }
+    }
+    tapInstalled = true
+
+    mode = .wake
+    sessionId += 1
+
+    audioEngine.prepare()
+    do {
+      try audioEngine.start()
+    } catch {
+      inputNode.removeTap(onBus: 0)
+      tapInstalled = false
+      mode = .idle
+      throw EngineError.audioEngineFailed(error.localizedDescription)
+    }
+    if debugEnabled {
+      print("[voice] start mode=wake provider=kws")
     }
   }
 

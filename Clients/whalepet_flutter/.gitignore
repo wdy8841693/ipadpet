@@ -37,6 +37,15 @@ migrate_working_dir/
 macos/Flutter/ephemeral/
 macos/Pods/
 
+# 本地唤醒词（sherpa-onnx）载荷：运行时动态库 + KWS 模型。
+# 由 tool/fetch_sherpa_onnx.sh 现场拉取（约 40MB），不入库；
+# 构建时由 Xcode 的「Copy KWS Payload」阶段拷进 App 包的 Resources/kws/。
+macos/.sherpa/
+
+# Windows 版 sherpa-onnx 载荷：运行时 DLL + ASR/KWS 模型。
+# 由 tool/fetch_sherpa_onnx_windows.py 现场拉取（运行时约 23MB，ASR 模型约 170MB），不入库。
+windows/.sherpa/
+
 # Symbolication related
 app.*.symbols
 
