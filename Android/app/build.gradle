@@ -1,0 +1,47 @@
+// Android Studio / Gradle 构建（命令行用户请直接跑 build-apk.sh，不需要 Gradle）
+//
+// 注意：本工程的 AndroidManifest.xml 里保留了 package="com.dywu.whalepet"，
+// 因为 build-apk.sh 用 aapt2 命令行打包时必须有它。
+// 若把 AGP 升到 8.x，请删掉 manifest 里的 package 属性（namespace 已在这里声明），
+// 并把下面的 version 改成 8.x。
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.dywu.whalepet'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId "com.dywu.whalepet"
+        minSdk 21
+        targetSdk 33
+        versionCode 1
+        versionName "1.3.0-android.1"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // 自用场景不混淆：动画/反射少，包也不大
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    // 立绘等素材以 assets 形式打包（与 build-apk.sh 一致），不走 aapt 资源表
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+}
+
+dependencies {
+    // WebSocket + HTTP。3.x 是纯 Java 实现，不引入 Kotlin stdlib。
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
+}

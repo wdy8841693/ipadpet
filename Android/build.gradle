@@ -1,0 +1,4 @@
+// 顶层构建脚本（Android Studio / Gradle 用；命令行构建请用 build-apk.sh）
+plugins {
+    id 'com.android.application' version '7.4.2' apply false
+}

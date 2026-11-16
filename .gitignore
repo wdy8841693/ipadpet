@@ -49,3 +49,10 @@ Clients/**/models/
 # 临时探针文件（测试/校验遗留）
 *.probe
 .wbtest
+
+# Android
+Android/.gradle/
+Android/local.properties
+Android/keystore/
+*.keystore
+Android/build/
