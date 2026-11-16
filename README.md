@@ -11,7 +11,7 @@
 | 部分 | 版本 | 说明 |
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
-| Flutter 客户端（`Clients/whalepet_flutter/`） | **v0.3.1** | Android 全屏 + Windows / macOS 桌宠，共用 `lib/core/`，走 `/api/agent` 文本协议 |
+| Flutter 客户端（`Clients/whalepet_flutter/`） | **v0.3.2** | Android 全屏 + Windows / macOS 桌宠，共用 `lib/core/`，走 `/api/agent` 文本协议 |
 | 原生 Java 原型（`Android/`） | v1.3.0-android.1 | 用 SurfaceView + Canvas 手写的第一版 Android App，保留作参考/对比 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.1** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
 
@@ -282,6 +282,7 @@ pm2 start Tools/deploy/pm2-switch.sh --name dsh-switch --interpreter bash --no-a
 
 | 版本 | 内容 |
 |---|---|
+| v1.3.2 | 一句话带命令、音频中断与恢复、Windows 托盘/自启、macOS 本地语音与真 KWS；重出 Android 0.3.2 安装包；详见 [docs/releases/v1.3.2.md](docs/releases/v1.3.2.md) |
 | v1.3.1 | 三端编译产物入库（Android APK / Windows 便携包 / macOS 桌宠包 + SHA256）；修复 device_kind 跟随平台、Windows 便携包附带 VC 运行库；详见 [docs/releases/v1.3.1.md](docs/releases/v1.3.1.md) |
 | v1.3.0 | 跨平台版：Flutter 三端客户端（Android 全屏 / Windows SAPI 离线语音桌宠 / macOS 文字版桌宠）合入主线，插件 0.4.x 新增 `/api/agent` 文本通道 |
 | v1.3.0-android.1 | 新增 Android 版（`Android/`）：SurfaceView + Canvas 渲染、AudioRecord 16k 采集、系统 TTS、OkHttp WebSocket，行为/数值/台词/协议与 iPad 版一致 |

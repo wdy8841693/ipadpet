@@ -4,7 +4,7 @@ description: >-
   Android 全屏场景（阶段 C，系统语音识别与系统 TTS）+
   Windows 桌宠壳（阶段 E，透明置顶窗口、SAPI 离线语音与系统 TTS）+
   macOS 桌宠壳（阶段 D 文字版，AppKit 透明窗口 + AVSpeechSynthesizer）。
-version: 0.3.1+2
+version: 0.3.2+3
 publish_to: none
 
 environment:
