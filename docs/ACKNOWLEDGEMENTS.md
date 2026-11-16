@@ -4,13 +4,22 @@
 
 **[dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)**（MIT，Copyright (c) 2026 Sutera-Diffusus）：
 本 App 的鲸鱼娘角色立绘（10 张状态图 + AppIcon）直接来自该项目 npm 包 v2.5.3 的
-`assets/generated/` 目录，仅做尺寸归一化与 webp→PNG 转换。
+`assets/generated/` 目录，仅做尺寸归一化与 webp→PNG 转换；同一套 PNG 供 iPad 与
+Flutter 三端客户端（Android / Windows / macOS）共用。
 完整映射表与许可文本见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 与
 [LICENSE-dsh-whale-musume.txt](LICENSE-dsh-whale-musume.txt)。
 
+## 直接使用的第三方库
+
+- **[OkHttp](https://github.com/square/okhttp) 3.12.13 + [Okio](https://github.com/square/okio) 1.17.6**（Apache-2.0）：
+  仅 Android 原生 Java 原型（`Android/libs/` 两个 jar）的 WebSocket 实现；jar 内自带许可声明，未修改。
+- **[Flutter / Dart](https://github.com/flutter/flutter)**（BSD-3-Clause）与
+  **[ffi](https://github.com/dart-lang/native/tree/main/pkgs/ffi)**（BSD-3-Clause）：
+  跨平台客户端的框架与 FFI 辅助库，由使用者本机安装/pub 拉取，不随仓库分发源码。
+
 ## 设计思路参考（未复制代码/素材）
 
-全部 Swift 代码与背景/特效素材为本仓库原创。以下开源项目仅在**设计思路**层面提供参考：
+全部 Swift / Dart / Java / 插件 JS 代码与背景/特效素材为本仓库原创。以下开源项目仅在**设计思路**层面提供参考：
 
 ### VPet-Simulator（虚拟桌宠模拟器）
 - 仓库：https://github.com/LorisYounger/VPet
@@ -38,7 +47,8 @@
   DSH 插件按官方 Host API / bundle 契约编写（调研笔记见 [refs/](refs/)），语音识别复用其
   `speech-to-text` 服务（SenseVoice 本地模型），会话复用其官方 sessionController——本项目未复制 DSH 源码，
   仅作为插件调用其公开接口。
-- **Apple SpriteKit / AVFoundation / UIKit**：系统框架，程序化动画、音频采集与 TTS 的基础。
+- **Apple SpriteKit / AVFoundation / UIKit / AppKit**：系统框架，程序化动画、音频采集与 TTS 的基础。
+- **Windows SAPI / Android 系统语音服务**：操作系统自带的识别与合成能力（FFI 直连，无第三方运行时）。
 - **[Pillow](https://github.com/python-pillow/Pillow)**（MIT-CMU）：素材导入/生成脚本使用的 Python 图像库（开发期工具，不随 App 分发）。
 
 注意：VPet 默认动画版权归 VUP-Simulator 团队（另有授权条款），Shijima 为 GPL-3.0——
