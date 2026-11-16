@@ -12,6 +12,7 @@
 |---|---|---|
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
 | DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.1** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
+| 桌宠客户端（`Clients/whalepet_flutter/`） | **0.3.0** | Flutter 透明桌宠：宠物数值/互动 + `/api/agent` 文本通道；Windows 含本地语音（唤醒/听写/播报），macOS v1 为文字版 + 系统 TTS |
 
 ![预览](docs/preview.png)
 
@@ -27,6 +28,7 @@ ipadpet/
 │   ├── Support/              #   AppDelegate / ViewController / 服务器设置（Keychain）
 │   └── Resources.xcassets/   #   立绘与图标（来自上游 MIT 素材）
 ├── WhalePetTests/            # 纯逻辑 XCTest（状态机/数值/存档/配置校验）
+├── Clients/whalepet_flutter/ # 跨平台客户端（纯 Dart 核心 + Windows 桌宠壳）
 ├── Plugin/
 │   └── whalepet-dsh-bridge/  # DSH 插件（Host 网关 + 浏览器设置页，零第三方依赖）
 │       ├── index.js          #   插件入口：会话/人格/权限/任务提醒
@@ -40,6 +42,13 @@ ipadpet/
 │   ├── art/                  # 素材导入/生成脚本
 │   ├── scripts/check.py      # Linux 侧静态自检（Swift/资产/权限/插件测试）
 │   └── deploy/               # PM2 部署：dsh-web.sh（直连本地 dsh）、pm2-switch.sh
+├── Clients/
+│   └── whalepet_flutter/     # 桌面桌宠（Flutter）：Windows ✅ / macOS ✅（v1 文字版）
+│       ├── lib/core/         #   纯 Dart：宠物、存档、/api/agent、语音状态机（dart test 可跑）
+│       ├── lib/platform/     #   平台适配：Win32 FFI、macOS MethodChannel+AppKit、SAPI、AVSpeech
+│       ├── lib/ui/           #   透明桌宠界面：立绘、气泡、聊天/设置面板、右键菜单
+│       ├── windows/  macos/  #   两个平台 runner（macOS：透明窗口 + 菜单栏状态项）
+│       └── tool/             #   打包脚本、mock 网关、开发自检
 ├── docs/
 │   ├── ARCHITECTURE.md       # 整体架构、协议、会话策略、排障
 │   ├── DESIGN.md             # 设计取舍与 A8 性能预算
@@ -119,6 +128,70 @@ Xcode 里选 WhalePet target → Signing 选免费 Apple ID（7 天有效期）�
 
 点「保存并测试」，提示「连接成功」即可说「小鲸小鲸」。
 
+### 3. Windows 桌宠（`Clients/whalepet_flutter/`）
+
+前置：Windows 10/11 x64 + Flutter SDK + Visual Studio 2022 生成工具的 **C++ 桌面开发**组件
+（MSVC + CMake + Windows SDK，缺一个都会 `flutter doctor` 报 incomplete）。
+
+```bash
+cd Clients/whalepet_flutter
+flutter pub get
+flutter run -d windows        # 调试；或 flutter build windows 出 Release
+```
+
+启动后是一个 380×560 的**透明置顶窗口**，里面只有宠物和气泡：
+
+- 单击宠物摸头、双击打开聊天面板、右键菜单（摸头/投喂/玩/说点什么/设置/睡觉/重连/退出）、按住拖动整窗移动；
+- 鼠标移到透明区域时窗口自动穿透，不挡后面软件的点击；
+- 第一次用先右键 →「设置」，填服务器地址（`http://<DSH 机器 IP>:8787`）与
+  `~/.dsh/whalepet/ipad-token` 的内容。
+
+只发**识别后的文本**（`WS /api/agent`），不上传持续音频；回答用 Windows 系统 TTS 播报。
+
+本地语音（全离线，零模型下载）：待机只用 SAPI5 中文桌面识别器跑「唤醒词小语法」，
+说「小鲸小鲸」后播「我在」并切到听写语法，识别成文本后上行；播报期间自动闭麦。
+需要麦克风；没有麦克风也可以用 `WHALEPET_VOICE_WAV=<wav>` 注入音频跑通全链路
+（开发验证用，见客户端 README）。
+
+数据在 `%APPDATA%\WhalePet\`：设置明文、令牌 DPAPI 加密、宠物存档原子写。
+
+出便携包：
+
+```bash
+flutter build windows --release
+python tool/package_release.py --no-build   # dist/whalepet-windows-x64-<version>.zip
+```
+
+实现细节、与架构文档的偏差、真机踩坑记录见
+[客户端 README](Clients/whalepet_flutter/README.md)。
+
+### 4. macOS 桌宠（`Clients/whalepet_flutter/`）
+
+前置：macOS 13+（Intel / Apple Silicon 均可）+ Xcode + Flutter SDK。
+
+```bash
+cd Clients/whalepet_flutter
+flutter pub get
+flutter run -d macos                       # 调试
+flutter build macos --release              # Release
+python3 tool/package_release_macos.py --no-build  # dist/whalepet-macos-<version>.zip
+```
+
+同样是 380×560 的**透明置顶小窗**，窗口能力交给原生 AppKit（`macos/Runner`）：
+
+- 不进 Dock、不抢菜单栏，菜单栏常驻 🐳 状态项（显示 / 退出），退出前自动落盘；
+- 常驻所有空间（含全屏应用之上）；走路/游泳时窗口跟着宠物移动，自动夹在显示器工作区内；
+- 鼠标移到透明区域自动穿透（`ignoresMouseEvents`）；
+- 交互与 Windows 完全一致：单击摸头、双击聊天、右键菜单、按住拖动。
+
+**v1 能力边界**：文字对话（`/api/agent`）+ 系统 TTS（AVSpeechSynthesizer zh-CN）已通；
+本地唤醒词与语音识别未接（设置里语音入口显示「语音关闭」），留待下一阶段。
+令牌暂存 `~/.whalepet/token.bin` 明文 0600（同机 `ipad-token` 也是 0600 明文，
+威胁模型一致），Keychain 与公证待补。
+
+出包后首次运行需「右键 → 打开」绕过 Gatekeeper（未公证）。踩坑与实现细节见
+[客户端 README](Clients/whalepet_flutter/README.md) 的「macOS 平台差异」。
+
 ## 配置（插件）
 
 见 [Plugin/whalepet-dsh-bridge/README.md](Plugin/whalepet-dsh-bridge/README.md)，常用项：
@@ -141,6 +214,13 @@ python3 Tools/scripts/check.py
 
 # 插件单元/集成测试（53 个）
 cd Plugin/whalepet-dsh-bridge && node --test test/*.test.js
+```
+
+# 跨平台客户端（Windows 桌宠）：核心单测 + 静态分析 + 构建
+cd Clients/whalepet_flutter
+dart test            # 纯 Dart 核心与协议测试
+flutter analyze
+flutter build windows
 ```
 
 Swift 编译与真机验证必须在 macOS + Xcode 上做，Linux 侧只能做静态哨兵。
