@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:ui' show Offset;
 
@@ -283,7 +284,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     final ClientIdStore idStore = ClientIdStore(file: paths.clientIdFile);
     String? id = await idStore.read();
     if (id == null) {
-      id = newClientId(random: _random);
+      id = newClientId(prefix: Platform.operatingSystem, random: _random);
       await idStore.write(id);
     }
     _clientId = id;
@@ -346,6 +347,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
       serverUri: uri,
       token: token,
       clientId: _clientId,
+      deviceKind: Platform.operatingSystem,
       subscriptionsAnnouncements: _settings.subscriptionsAnnouncements,
     );
     _gateway = gateway;
