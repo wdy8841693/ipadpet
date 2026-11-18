@@ -47,6 +47,8 @@ export const VOICE_PERSONA = [
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 300000
 const DEFAULT_MAX_WAIT_MS = 600000
+// 长任务期间的进度心跳间隔（客户端只刷气泡、不念）。与旧 iPad 音频通道的
+// thinking 心跳保持同一个节奏。
 const PROGRESS_INTERVAL_MS = 8000
 
 /** 读 JSON（不存在/损坏都返回 fallback）。 */
@@ -558,6 +560,11 @@ export function apply(ctx, config = {}) {
     logger,
     requestTimeoutMs,
     maxWaitMs,
+    // 进度播报间隔：config 里显式给了就按 >=1 秒执行，否则用 8 秒。
+    // 服务类自带同样的默认值；这里显式传是为了让 bundle 配置能改它。
+    progressIntervalMs: Number.isFinite(Number(config.progressIntervalMs)) && Number(config.progressIntervalMs) > 0
+      ? Math.max(1000, Math.trunc(Number(config.progressIntervalMs)))
+      : PROGRESS_INTERVAL_MS,
     clientTimeZone: 'Asia/Shanghai',
     onQuestion: ({ sessionId }) => takeQuestion(sessionId),
     // 宠物只有一个长期会话：所有设备共用同一个队列，避免两条 prompt 塞进同一 turn。

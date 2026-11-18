@@ -188,7 +188,7 @@ export class ClientHub {
    * 登记一条命令（幂等键 = request_id）。
    * @returns {{state: string, result?: object}} 已存在时返回旧记录
    */
-  beginRequest({ requestId, originClientId, conversationId, text } = {}) {
+  beginRequest({ requestId, originClientId, conversationId, text, controller } = {}) {
     const existing = this.requests.get(requestId)
     if (existing) {
       // 命中幂等：只更新「最近一次」的时间，状态保持不变。
@@ -203,6 +203,9 @@ export class ClientHub {
       state: 'running',
       result: null,
       at: this.now(),
+      // 取消可能来自重连后的新连接；控制器必须在 Hub 上，旧 AgentChannel
+      // 虽然已经断开，也能收到 abort 并停止桥接层等待。
+      controller: controller ?? null,
     }
     this.requests.set(requestId, record)
     this.#pruneRequests()
@@ -239,6 +242,14 @@ export class ClientHub {
     if (!record) return null
     record.state = 'cancelled'
     record.at = this.now()
+    const controller = record.controller
+    if (controller && !controller.signal.aborted) {
+      try {
+        controller.abort(new Error('cancelled by client'))
+      } catch {
+        // 已结束的控制器：忽略。
+      }
+    }
     return record
   }
 

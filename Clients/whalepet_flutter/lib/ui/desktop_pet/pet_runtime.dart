@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:ui' show Offset;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../../core/agent/agent_gateway.dart';
 import '../../core/agent/agent_protocol.dart';
@@ -159,6 +160,8 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   PetPanel _panel = PetPanel.none;
   bool _menuOpen = false;
   bool _clickThrough = false;
+  bool _clickThroughInFlight = false;
+  bool _clickThroughDirty = false;
   bool _windowVisible = true;
   bool _windowReady = false;
   bool _started = false;
@@ -485,12 +488,12 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
         _bubbleRemaining -= dt;
         if (_bubbleRemaining <= 0) _bubbleText = null;
       }
-      if (_settings.clickThroughWhereTransparent) {
-        _hitTestTimer += dt;
-        if (_hitTestTimer >= 0.1) {
-          _hitTestTimer = 0;
-          unawaited(_updateClickThrough());
-        }
+      // 透明区穿透是桌宠的固定行为（旧版本的可配置开关已移除）：
+      // 透明区让点击落到下层，只有宠物/面板/菜单接收鼠标。
+      _hitTestTimer += dt;
+      if (_hitTestTimer >= 0.1) {
+        _hitTestTimer = 0;
+        unawaited(_updateClickThrough());
       }
       _saveTimer += dt;
       if (_saveTimer >= 15) {
@@ -568,17 +571,48 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
 
   Future<void> _updateClickThrough() async {
     if (!_windowReady) return;
-    final ({double x, double y})? cursor = window.cursorPosition();
-    if (cursor == null) return;
-    _bounds = await window.bounds();
-    final Offset local = Offset(cursor.x - _bounds.left, cursor.y - _bounds.top);
-    final bool interactive = PetLayout.petRect.contains(local) ||
-        (_panel != PetPanel.none && PetLayout.panelRect.contains(local)) ||
-        (_menuOpen && PetLayout.menuRect.contains(local));
-    final bool want = !interactive;
-    if (want == _clickThrough) return;
-    _clickThrough = want;
-    await window.setClickThrough(want);
+    // 同一时刻只允许一轮在途；重复触发只标记 dirty，结束后补算，避免
+    // 多个 await bounds()/setClickThrough() 交错把原生状态改回旧值。
+    if (_clickThroughInFlight) {
+      _clickThroughDirty = true;
+      return;
+    }
+    _clickThroughInFlight = true;
+    try {
+      do {
+        _clickThroughDirty = false;
+        final ({double x, double y})? cursor = window.cursorPosition();
+        if (cursor == null) break;
+        _bounds = await window.bounds();
+        // bounds() 是 await：期间面板可能已开/关。用最新状态重算，避免用旧
+        // 光标判定后把刚打开的面板又设成穿透（或反之）。
+        if (!_windowReady) break;
+        final Offset local =
+            Offset(cursor.x - _bounds.left, cursor.y - _bounds.top);
+        final bool want = PetLayout.shouldClickThrough(
+          local,
+          panelVisible: _panel != PetPanel.none,
+          menuVisible: _menuOpen,
+        );
+        if (want != _clickThrough) {
+          _clickThrough = want;
+          await window.setClickThrough(want);
+          // 切换穿透会改变窗口的命中行为，立即重画一次，避免内容与命中区域
+          // 短暂不一致（面板刚打开时点不到按钮就是这样过去的）。
+          _refreshWindow();
+        }
+      } while (_clickThroughDirty && !_disposed && _windowReady);
+    } finally {
+      _clickThroughInFlight = false;
+    }
+  }
+
+  /// 面板/菜单开闭后立刻重算穿透，不等下一个 0.1s tick。
+  ///
+  /// 打开时立即取消穿透，面板输入框才能拿到点击；关闭时立即恢复穿透，
+  /// 宠物上方那块透明区不会再"吞"掉本该落到下层应用的点击。
+  void _refreshClickThroughNow() {
+    if (_windowReady) unawaited(_updateClickThrough());
   }
 
   // -- 互动 ----------------------------------------------------------------
@@ -677,9 +711,11 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   void openPanel(PetPanel panel) {
     _panel = panel;
     _menuOpen = false;
-    if (_clickThrough) {
-      _clickThrough = false;
-      unawaited(window.setClickThrough(false));
+    // 立即取消穿透：面板里的按钮/输入框必须能拿到点击与键盘焦点。
+    _refreshClickThroughNow();
+    final Object adapter = window;
+    if (adapter is WindowActivator) {
+      unawaited(adapter.activate());
     }
     notifyListeners();
   }
@@ -688,16 +724,16 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   void closePanel() {
     if (_panel == PetPanel.none) return;
     _panel = PetPanel.none;
+    // 立即恢复按光标判定的穿透：透明区不再吞点击。
+    _refreshClickThroughNow();
     notifyListeners();
   }
 
   @override
   void toggleMenu() {
     _menuOpen = !_menuOpen;
-    if (_clickThrough) {
-      _clickThrough = false;
-      unawaited(window.setClickThrough(false));
-    }
+    // 菜单显示时取消穿透，隐藏时恢复穿透。
+    _refreshClickThroughNow();
     notifyListeners();
   }
 
@@ -705,6 +741,7 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
   void closeMenu() {
     if (!_menuOpen) return;
     _menuOpen = false;
+    _refreshClickThroughNow();
     notifyListeners();
   }
 
@@ -909,7 +946,21 @@ class PetRuntime extends ChangeNotifier implements PetViewModel {
     if (trimmed.isEmpty) return;
     _bubbleText = trimmed;
     _bubbleRemaining = seconds;
+    _refreshWindow();
     notifyListeners();
+  }
+
+  /// 立刻重画窗口内容。
+  ///
+  /// 桌宠是个透明浮窗：窗口只在「内容变了」时由 Flutter 重绘，而鼠标穿透
+  /// 判定读的是窗口内容区（宠物/面板范围）。靠 `notifyListeners` 等下一帧，
+  /// 拖窗口/切面板时会出现「窗口已经移走了、内容还停在旧位置」的短暂空窗，
+  /// 这期间穿透判定会按旧内容去做，点宠物的那一下会落到下层应用上。
+  void _refreshWindow() {
+    if (_disposed || !_windowReady) return;
+    final SchedulerBinding? binding = SchedulerBinding.instance;
+    binding?.ensureVisualUpdate();
+    binding?.scheduleFrame();
   }
 
   @override

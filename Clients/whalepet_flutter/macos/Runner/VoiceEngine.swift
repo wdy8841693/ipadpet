@@ -67,6 +67,7 @@ final class WhalePetVoiceEngine {
     case recognizerUnavailable(String)
     case noInputDevice
     case audioEngineFailed(String)
+    case onDeviceUnavailable
 
     var errorDescription: String? {
       switch self {
@@ -80,6 +81,8 @@ final class WhalePetVoiceEngine {
         return "没有可用的音频输入设备"
       case .audioEngineFailed(let message):
         return "音频采集起不来：\(message)"
+      case .onDeviceUnavailable:
+        return "系统没有提供本机语音识别；为避免把音频送到 Apple 服务器，已禁止启用语音"
       }
     }
   }
@@ -201,6 +204,12 @@ final class WhalePetVoiceEngine {
     self.recognizer = recognizer
     // supportsOnDeviceRecognition：macOS 10.15+ 才有；本工程部署目标是 12.0。
     supportsOnDevice = recognizer.supportsOnDeviceRecognition
+    // 本机识别不可用时禁止静默走 Apple 服务器。用户可以选择关掉语音，
+    // 文本对话不受影响；要开放云端识别必须另加显式授权开关。
+    guard supportsOnDevice else {
+      completion(.failure(EngineError.onDeviceUnavailable))
+      return
+    }
     prepareKWS()
     let info = InitInfo(
       provider: "apple-speech/\(localeIdentifier)",

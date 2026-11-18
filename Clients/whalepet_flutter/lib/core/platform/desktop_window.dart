@@ -73,6 +73,16 @@ abstract interface class WindowVisibilityAware {
   bool get isVisible;
 }
 
+/// 可选能力：把窗口激活成 key window（打开输入面板时用）。
+///
+/// macOS 的桌宠是 accessory（不进 Dock）应用，且窗口无边框：
+/// 不显式激活，文本框就拿不到键盘焦点，地址和令牌输入不进去。
+/// Windows 上点击窗口一般就会获得焦点，但同样提供该接口以便行为一致。
+abstract interface class WindowActivator {
+  /// 请求系统把窗口变成 key window 并激活应用。
+  Future<void> activate();
+}
+
 /// 不支持的平台用的空实现：所有调用都是 no-op，便于在 Linux/macOS 上跑 UI 逻辑测试。
 class NoopDesktopWindow implements DesktopWindowAdapter {
   const NoopDesktopWindow();

@@ -26,6 +26,11 @@ class MainFlutterWindow: NSWindow {
     self.titlebarAppearsTransparent = true
     self.hasShadow = false
 
+    // 无边框窗口默认不是 key window，文本框永远拿不到键盘焦点：
+    // 设置面板能打开、按钮能点，但地址和令牌输入框打不进字。
+    // 重写为 true 让它可以接收键盘输入（仍是 accessory 应用，不抢菜单栏）。
+    self.isMovableByWindowBackground = true
+
     // 按住宠物区域可以拖动窗口（对 Flutter 已接管的区域无效，拖拽主走
     // whalepet/window 通道的 startNativeDrag → performDrag）。
     self.isMovableByWindowBackground = true
@@ -36,4 +41,7 @@ class MainFlutterWindow: NSWindow {
 
     super.awakeFromNib()
   }
+
+  /// 允许无边框桌宠窗口成为 key window（否则文本框拿不到键盘焦点）。
+  override var canBecomeKey: Bool { true }
 }

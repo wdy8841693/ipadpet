@@ -649,8 +649,11 @@ ID 建议限制为 `[A-Za-z0-9_-]`、1～80 字符；命令文本去除首尾空
 `state` 第一版支持：
 
 ```text
-queued / started / approval / interrupted / finished / failed
+queued / started / progress / approval / interrupted / finished / failed
 ```
+
+`progress` 是「任务仍在跑」的心跳（服务端默认每 8 秒一条，单次 `wait` 也按该间隔切片）：
+客户端只刷新气泡/状态，**不进 TTS 播报队列**，否则长任务会每隔几秒打断一次正式播报。
 
 私有任务事件只发送给 `origin_client_id`，不能广播给所有设备。
 
@@ -820,6 +823,8 @@ whalepet-main
 代价是某个设备的长任务会阻塞其他设备的新命令。因此：
 
 - 必须发送 `queued` 状态；
+- 任务真正跑起来后按 `progressIntervalMs`（默认 8 秒）发 `progress` 心跳，
+  且服务端单次 `wait` 不得超过该间隔——否则整个执行期只阻塞在一次等待里，界面全静默；
 - UI 显示“还有一个任务在处理”；
 - 不要在客户端盲目超时后重复提交；
 - 后续如需并行，再引入不同 `conversation_id`，而不是绕过队列向同一会话并发 prompt。
@@ -899,9 +904,9 @@ whalepet-main
 语音：
 
 - 请求麦克风和必要的语音识别权限；
-- 默认使用内置 sherpa-onnx，不依赖 Apple 在线识别；
+- 当前落地方案是“唤醒用内置 sherpa-onnx KWS，指令识别用系统 `SFSpeechRecognizer` 本机模式”，不上传音频到 Apple；
 - 系统 TTS 使用 `AVSpeechSynthesizer`；
-- 如增加 `SFSpeechRecognizer` Provider，必须检查 `supportsOnDeviceRecognition`，并设置 `requiresOnDeviceRecognition`；
+- 若 `supportsOnDeviceRecognition` 为 false，直接禁用语音并提示，不静默回落到云端识别；
 - 发布时处理签名、公证和 App Sandbox 麦克风 entitlement。
 
 > **落地状态（2026-11-16）**：窗口与系统 TTS 已实现；本地语音分两段——
@@ -935,7 +940,7 @@ whalepet-main
 
 - Flutter 透明窗口配合原生 Win32 适配；
 - 处理置顶、无任务栏图标、托盘和开机启动；
-- 点击穿透通过原生窗口样式实现，并提供可恢复入口；
+- 点击穿透通过原生窗口样式实现（固定行为：透明区把点击让给下层，宠物/面板/菜单接收鼠标）；
 - 正确处理 Per-Monitor DPI、多显示器和工作区；
 - 原生窗口移动与 Dart 场景坐标不得互相覆盖。
 
@@ -954,7 +959,7 @@ whalepet-main
 > | 置顶 / 无任务栏图标 | ✅ | `HWND_TOPMOST` + `WS_EX_TOOLWINDOW` |
 > | **托盘** | ✅ | runner 里 `Shell_NotifyIcon`（`tray_icon.cpp`）：右键菜单（显示/隐藏、语音开关、设置、退出）、左键双击切显隐；Explorer 重启后按 `WM_TASKBARCREATED` 补回；菜单动作经 `whalepet/desktop` 通道给 Dart |
 > | **开机启动** | ✅ | `HKCU\...\CurrentVersion\Run` 注册表项，`dart:ffi` 直连 advapi32（不需管理员权限）；便携包换目录后自动刷新路径 |
-> | 点击穿透 + 可恢复入口 | ✅ | `WS_EX_TRANSPARENT`，命中测试用全局光标自动恢复 |
+> | 点击穿透（固定行为） | ✅ | `WS_EX_TRANSPARENT`，命中测试用全局光标自动恢复 |
 > | **Per-Monitor DPI / 多显示器 / 工作区** | ✅ | 清单已声明 `PerMonitorV2`；runner 监听 `WM_DISPLAYCHANGE` / `WM_SETTINGCHANGE` / `WM_DPICHANGED` → Dart 刷新 DPI 比例并把窗口夹回工作区 |
 > | 原生音频采集 16k PCM16 | ✅ | SAPI5 引擎内完成，PCM 不穿 Dart（§7.4） |
 > | **sherpa-onnx Windows 原生库** | ⛔ 阻塞 | 运行时 DLL 与 ASR 模型已可取（npm 官方包 / HF 镜像），但官方 `c-api.h` 头文件只在 GitHub Releases（当前网络不可达），缺它无法编译 Provider 或写 FFI 绑定；依赖脚本见 `Clients/whalepet_flutter/tool/fetch_sherpa_onnx_windows.py` |

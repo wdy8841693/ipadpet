@@ -194,6 +194,16 @@ export class AgentChannel {
     }
 
     // 同一客户端第一版只允许一个活动语音命令。
+    // active 只属于当前连接；断线重连后新 AgentChannel 的 active 是空的，
+    // 必须查 Hub，否则可以借重连绕过单活动命令约束。
+    if (this.hub.runningRequests(clientId).length > 0) {
+      this.#sendError({
+        code: 'client_busy',
+        message: '你还有一个命令在处理中',
+        request_id: requestId,
+      })
+      return
+    }
     const busy = [...this.active.entries()].find(([, item]) => !item.cancelled)
     if (busy) {
       this.#sendError({
@@ -204,8 +214,15 @@ export class AgentChannel {
       return
     }
 
-    this.hub.beginRequest({ requestId, originClientId: clientId, conversationId, text })
-    const entry = { cancelled: false }
+    const controller = new AbortController()
+    this.hub.beginRequest({
+      requestId,
+      originClientId: clientId,
+      conversationId,
+      text,
+      controller,
+    })
+    const entry = { cancelled: false, controller }
     this.active.set(requestId, entry)
 
     // 先回一个 queued，让用户知道命令被收到了（共享会话可能正忙）。
@@ -224,6 +241,7 @@ export class AgentChannel {
         requestId,
         conversationId,
         text,
+        signal: entry.controller.signal,
         notify,
       })
       if (entry.cancelled) {
@@ -283,8 +301,19 @@ export class AgentChannel {
       return
     }
     const entry = this.active.get(requestId)
+    const record = this.hub.getRequest(requestId)
+    if (record?.originClientId && this.clientId && record.originClientId !== this.clientId) {
+      this.#sendError({ code: 'not_owner', message: '只能取消自己发起的命令', request_id: requestId })
+      return
+    }
     if (!entry) {
-      this.#sendTask(this.clientId ?? '', requestId, this.conversationId ?? '', 'interrupted', '没有在跑的命令')
+      // 重连后的新连接没有本连接 active 记录，但 Hub 里任务可能还在跑。
+      if (!record || record.state !== 'running') {
+        this.#sendTask(this.clientId ?? '', requestId, this.conversationId ?? '', 'interrupted', '没有在跑的命令')
+        return
+      }
+      this.hub.cancelRequest(requestId)
+      this.#sendTask(this.clientId ?? '', requestId, this.conversationId ?? '', 'interrupted', '已停止等待（远程任务可能仍在继续）')
       return
     }
     entry.cancelled = true

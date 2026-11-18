@@ -182,9 +182,10 @@ node Tools/agent/client.js --text "再问一次" --request-id req-001
 
 语音下达任务后，插件会推三类事件（iPad 端 v1.2.2+ 会显示气泡，关键事件还会语音播报）：
 
-| 事件 | 时机 | iPad 表现 |
+| 事件 | 时机 | iPad / 桌宠表现 |
 |---|---|---|
 | `task{state:"started"}` | prompt 已被 Agent 接受 | 气泡「开始执行，我这就去办」 |
+| `task{state:"progress"}` | 长任务执行中，默认每 8 秒一条 | 只刷新气泡（「还在处理中…」），**不念**，避免打断正式播报 |
 | `task{state:"approval"}` | `wait()` 返回 `input-required`（有待批准的授权/问题） | 气泡 + **语音播报**「有个操作需要你授权…」 |
 | `task{state:"interrupted"}` | 断线重连时任务仍在后台跑 | 气泡「连接恢复了，任务还在后台继续」 |
 | `task{state:"finished"}` | 本轮结束、`response` 之后 | 气泡「做完了」 |
@@ -204,7 +205,9 @@ node Tools/agent/client.js --text "再问一次" --request-id req-001
 - 权限默认 `workspace-write`：能写的地方只有它自己的工作目录 `~/.dsh/whalepet/workspace`，碰不到系统其它部分；
 - 人格提示注册在**宠物 Agent 自己的 scope** 里：要求它用工具真的做完，再用 1~3 句口语汇报；
 - 回复会经 `toSpeechText()` 去掉 Markdown/链接/代码块，TTS 念出来是正常中文；
-- 长任务期间插件每 8 秒发一个 `thinking` 事件，iPad 上鲸鱼娘会一直保持「思考中」，不会像断线。
+- 长任务期间插件每 8 秒发一个进度心跳（旧音频通道是 `thinking`，新文本通道是
+  `task{state:"progress"}`），iPad/桌宠会一直显示「处理中」并刷新气泡，不会像卡死。
+  单次 `wait` 也按这个间隔切片，所以再长的任务也不会「一次 wait 阻塞到超时、期间全静默」。
 
 ## 关键设计
 

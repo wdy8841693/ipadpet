@@ -106,6 +106,16 @@ function createFakeEnv({ transcripts = [], waitQueue = [] } = {}) {
           output: { truncated: false, records: [] },
         }
       }
+      if (scripted?.kind === 'timeout') {
+        // 模拟「任务还在跑」：wait 阻塞到超时（与真实 gateway 一致），但不产出记录。
+        const delay = scripted.delayMs ?? request.timeoutMs ?? 0
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+        return {
+          reason: 'timeout',
+          state: { cursor: session.cursor, active: true, running: true, queue: null, pendingInput: [] },
+          output: { truncated: false, records: [] },
+        }
+      }
       session.cursor += 1
       const text = `收到：${session.pending}`
       return {
@@ -638,6 +648,57 @@ test('其它 DSH 会话开始/完成/授权会播报到 iPad，宠物自己的�
     assert.equal(continued, true, 'approval 监听必须把 next() 的 outcome 返回')
     const approvalEvent = await client.waitFor((event) => event.type === 'task' && event.state === 'approval')
     assert.match(approvalEvent.message.text, /授权/)
+  } finally {
+    client.close()
+    await disposePlugin(plugin)
+  }
+})
+
+test('长任务执行期会持续发 progress 心跳（不是只有 started 然后长时间静默）', async () => {
+  // 每次 wait 都返回 timeout（任务仍在跑）：真实实现的循环会一直等到最终回复
+  // 或 maxWaitMs。插件必须按自己的 progressIntervalMs 发心跳（默认 8 秒），
+  // 否则桌宠在整个执行期只会看到 started，然后就一直静默。
+  const plugin = await startPlugin({
+    waitQueue: Array.from({ length: 50 }, () => ({ kind: 'timeout' })),
+    config: { progressIntervalMs: 1000 },
+  })
+  const client = new TestWebSocketClient()
+  try {
+    const handshake = await client.connect({
+      port: plugin.port,
+      path: '/api/agent',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    assert.equal(handshake.status, 101)
+    client.sendJSON({
+      type: 'hello',
+      protocol: 2,
+      client_id: 'macos-progress',
+      conversation_id: 'whalepet-main',
+      device_kind: 'macos',
+      subscriptions: { announcements: false },
+    })
+    await client.waitFor((event) => event.type === 'ready')
+
+    client.sendJSON({
+      type: 'command',
+      request_id: 'req-progress',
+      client_id: 'macos-progress',
+      conversation_id: 'whalepet-main',
+      text: '整理一堆备课资料',
+    })
+    // 脚本化的 wait 都返回 timeout（任务仍在跑）：真实实现的循环会持续等待，
+    // 单次等待不超过进度间隔，因此窗口内必然先出现 progress 心跳。
+    const progress = await client.waitFor(
+      (event) => event.type === 'task' && event.state === 'progress',
+      { timeoutMs: 8000 },
+    )
+
+    assert.equal(progress.message.request_id, 'req-progress')
+    assert.equal(progress.message.origin_client_id, 'macos-progress')
+    assert.ok(progress.message.text && progress.message.text.length > 0, '进度心跳必须带可显示文案')
+    assert.ok(progress.message.event_id, '进度心跳也要有 event_id（客户端靠它去重）')
+    assert.match(progress.message.text, /\S/, '心跳文案不能是空白')
   } finally {
     client.close()
     await disposePlugin(plugin)

@@ -1,6 +1,7 @@
 import AVFoundation
 import Cocoa
 import FlutterMacOS
+import Security
 
 /// 应用代理：桌宠的平台能力落点（docs/CROSS_PLATFORM.md §10.2）。
 ///
@@ -24,6 +25,7 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
   private var speechChannel: FlutterMethodChannel?
   private var voiceChannel: FlutterMethodChannel?
   private var windowChannel: FlutterMethodChannel?
+  private var secureChannel: FlutterMethodChannel?
   private var synthesizer: AVSpeechSynthesizer?
   private var voiceEngine: WhalePetVoiceEngine?
   private var screenObserver: NSObjectProtocol?
@@ -88,6 +90,13 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
     lifecycleChannel =
         FlutterMethodChannel(name: "whalepet/lifecycle", binaryMessenger: messenger)
 
+    // Bearer 令牌从明文文件迁到 Keychain（§11.2）。
+    let secure = FlutterMethodChannel(name: "whalepet/secure", binaryMessenger: messenger)
+    secure.setMethodCallHandler { [weak self] call, result in
+      self?.handleSecureCall(call, result: result)
+    }
+    secureChannel = secure
+
     let speech = FlutterMethodChannel(name: "whalepet/speech", binaryMessenger: messenger)
     speech.setMethodCallHandler { [weak self] call, result in
       self?.handleSpeechCall(call, result: result)
@@ -103,6 +112,65 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
     voiceEngine = WhalePetVoiceEngine()
 
     setupStatusItem()
+  }
+
+  // -- whalepet/secure 通道（Keychain）--------------------------------------
+
+  private func handleSecureCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let account = "serverToken"
+    switch call.method {
+    case "read":
+      result(keychainRead(account: account))
+    case "write":
+      guard let value = (call.arguments as? [String: Any])?["value"] as? String else {
+        result(false)
+        return
+      }
+      result(keychainWrite(value, account: account))
+    case "delete":
+      result(keychainDelete(account: account))
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func keychainBaseQuery(account: String) -> [String: Any] {
+    return [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "com.dywu.whalepet",
+      kSecAttrAccount as String: account,
+    ]
+  }
+
+  private func keychainRead(account: String) -> String? {
+    var query = keychainBaseQuery(account: account)
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    guard status == errSecSuccess, let data = item as? Data else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  private func keychainWrite(_ value: String, account: String) -> Bool {
+    let data = Data(value.utf8)
+    let query = keychainBaseQuery(account: account)
+    let attributes: [String: Any] = [
+      kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+    ]
+    var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    if status == errSecItemNotFound {
+      var add = query
+      add.merge(attributes) { _, newer in newer }
+      status = SecItemAdd(add as CFDictionary, nil)
+    }
+    return status == errSecSuccess
+  }
+
+  private func keychainDelete(account: String) -> Bool {
+    let status = SecItemDelete(keychainBaseQuery(account: account) as CFDictionary)
+    return status == errSecSuccess || status == errSecItemNotFound
   }
 
   // -- whalepet/speech 通道（AVSpeechSynthesizer）------------------------------
@@ -341,6 +409,13 @@ class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
          event.type == .leftMouseDragged || event.type == .leftMouseDown {
         window.performDrag(with: event)
       }
+      result(nil)
+    case "activate":
+      // 打开设置/聊天面板时把窗口变成 key window 并激活应用：
+      // 桌宠是 accessory 应用且窗口无边框，不显式激活就拿不到键盘焦点，
+      // 输入框会打不进字。
+      NSApp.activate(ignoringOtherApps: true)
+      window.makeKeyAndOrderFront(nil)
       result(nil)
     default:
       result(FlutterMethodNotImplemented)

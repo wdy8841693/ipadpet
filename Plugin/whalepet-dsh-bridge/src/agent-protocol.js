@@ -22,10 +22,16 @@ export const MAX_CONTROL_MESSAGE_BYTES = 64 * 1024
 /** 默认会话 id：所有设备共享同一个宠物长期会话。 */
 export const DEFAULT_CONVERSATION_ID = 'whalepet-main'
 
-/** 私有任务事件的状态集合。 */
+/**
+ * 私有任务事件的状态集合。
+ *
+ * `progress` 是「任务仍在跑」的心跳（长任务几十秒没动静时发一条），
+ * 客户端约定只刷新气泡、不进播报队列，避免心跳反复打断 TTS。
+ */
 export const TASK_STATES = Object.freeze([
   'queued',
   'started',
+  'progress',
   'approval',
   'interrupted',
   'finished',

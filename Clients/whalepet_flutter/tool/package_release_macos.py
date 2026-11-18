@@ -30,9 +30,11 @@ FETCH_SCRIPT = ROOT / 'tool' / 'fetch_sherpa_onnx.sh'
 
 # 构建时跳过的目录：产物/依赖缓存/其它平台/大文件。
 # 目的两个：一是快，二是别把别处的 `._` 垃圾文件带进构建目录。
+# rsync 模式必须以 / 开头锚定到传输根，否则 'android/' 会连
+# lib/platform/android/ 一起排除，macOS 构建时 Dart 就找不到 NativeBridge。
 BUILD_EXCLUDES = (
-    'build/', '.dart_tool/', 'dist/', '.git/',
-    'android/', 'ios/', 'windows/', 'linux/',
+    '/build/', '/.dart_tool/', '/dist/', '/.git/',
+    '/android/', '/ios/', '/windows/', '/linux/',
 )
 
 
@@ -146,14 +148,15 @@ def package(version: str, app: Path) -> Path:
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for path in sorted(app.rglob('*')):
             arcname = Path('whalepet_flutter.app') / path.relative_to(app)
-            if path.is_dir():
-                continue
-            # 符号链接（Framework 里的版本链）按链接本身写入。
+            # 先判断符号链接：指向目录的链接（如 Versions/Current）也会
+            # 被 is_dir() 判为目录，不能在 is_dir() 分支里提前跳过。
             if path.is_symlink():
                 info = zipfile.ZipInfo(str(arcname))
                 info.create_system = 3
                 info.external_attr = (0o120777 << 16)
                 zf.writestr(info, str(os.readlink(path)))
+                continue
+            if path.is_dir():
                 continue
             zf.write(path, str(arcname))
     return out

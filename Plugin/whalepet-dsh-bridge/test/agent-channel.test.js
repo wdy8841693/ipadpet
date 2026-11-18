@@ -20,12 +20,14 @@ import { TestWebSocketClient } from './ws-client.js'
 const TOKEN = 'agent-test-token-0123456789'
 
 /** 假的 Agent 执行服务：记录调用，按需延迟。 */
-function createFakeAgentService({ replies = {}, delayMs = 0, notify = true } = {}) {
+function createFakeAgentService({ replies = {}, delayMs = 0, notify = true, onExecute } = {}) {
   const calls = []
   return {
     calls,
-    async execute({ requestId, conversationId, text, notify: progress }) {
+    async execute(args) {
+      const { requestId, conversationId, text, notify: progress } = args
       calls.push({ requestId, conversationId, text })
+      onExecute?.(args)
       if (notify) progress?.({ state: 'started', text: '开始执行' })
       if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs))
       const reply = replies[text] ?? `收到：${text}`
@@ -297,7 +299,13 @@ test('/api/agent：A 重连后收到自己的缓存结果，收不到 B 的私�
 })
 
 test('/api/agent：取消只承诺停止等待，不宣称远程任务已终止', async () => {
-  const service = createFakeAgentService({ delayMs: 200 })
+  let aborted = false
+  const service = createFakeAgentService({
+    delayMs: 200,
+    onExecute({ signal }) {
+      signal?.addEventListener('abort', () => { aborted = true })
+    },
+  })
   const { bridge, port } = await startServer({ service })
   const { client } = await connectAgent(port)
   try {
@@ -306,11 +314,46 @@ test('/api/agent：取消只承诺停止等待，不宣称远程任务已终止'
     client.sendJSON({ type: 'cancel', request_id: 'req-cancel', client_id: 'android-1' })
     const interrupted = await client.waitFor((event) => event.type === 'task' && event.state === 'interrupted')
     assert.match(interrupted.message.text, /远程任务/)
+    assert.equal(aborted, true, '取消必须让桥接层停止等待；远程任务是否终止不作承诺')
     // 取消之后不再展示结果。
     await new Promise((resolve) => setTimeout(resolve, 350))
     assert.equal(client.messages.some((message) => message.json?.type === 'response'), false)
   } finally {
     client.close()
+    await bridge.close()
+  }
+})
+
+test('/api/agent：重连不能绕过同一客户端单活动命令约束', async () => {
+  const service = createFakeAgentService({ delayMs: 400 })
+  const { bridge, port } = await startServer({ service })
+  const first = await connectAgent(port, { clientId: 'android-reconnect' })
+  try {
+    first.client.sendJSON({
+      type: 'command',
+      request_id: 'req-running',
+      client_id: 'android-reconnect',
+      text: '还在跑的任务',
+    })
+    await first.client.waitFor((event) => event.type === 'task' && event.state === 'started')
+    first.client.close()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const again = await connectAgent(port, { clientId: 'android-reconnect' })
+    again.client.sendJSON({
+      type: 'command',
+      request_id: 'req-second',
+      client_id: 'android-reconnect',
+      text: '第二条命令',
+    })
+    const busy = await again.client.waitFor(
+      (event) => event.type === 'error' && event.code === 'client_busy',
+    )
+    assert.equal(busy.message.request_id, 'req-second')
+    assert.equal(service.calls.length, 1)
+    again.client.close()
+  } finally {
+    first.client.close()
     await bridge.close()
   }
 })

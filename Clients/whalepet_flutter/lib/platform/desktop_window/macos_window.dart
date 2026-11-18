@@ -18,7 +18,11 @@ import '../../core/platform/window_placement.dart';
 ///     「左上角原点」的全局坐标，与 Dart 语义直接对齐，而且接口是同步的
 ///     （`cursorPosition()` 在 `DesktopWindowAdapter` 里是同步方法，不能走 channel）。
 class MacOSDesktopWindow
-    implements DesktopWindowAdapter, DisplayChangeAware, WindowVisibilityAware {
+    implements
+        DesktopWindowAdapter,
+        DisplayChangeAware,
+        WindowVisibilityAware,
+        WindowActivator {
   MacOSDesktopWindow() {
     // 原生侧在「显示器参数变化」时会回调这个通道，桌宠据此重新约束位置。
     _channel.setMethodCallHandler(_onNativeCall);
@@ -48,10 +52,13 @@ class MacOSDesktopWindow
 
   static DynamicLibrary? _coreGraphics;
 
-  static final Pointer<Void> Function() _cgEventCreate = _loadCg()
-      .lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>(
-    'CGEventCreate',
-  );
+  // CGEventCreate 的 C 签名是 `CGEventRef CGEventCreate(CGEventSourceRef source)`，
+  // 必须传一个 source（传 nullptr 表示默认事件源）。之前误声明成无参函数，
+  // 调用时第一个参数寄存器是残留值，真机上 CGEventCreate 直接返回 NULL，
+  // 于是 cursorPosition() 永远返回 null、透明穿透从启动起全程失效。
+  static final Pointer<Void> Function(Pointer<Void>) _cgEventCreate = _loadCg()
+      .lookupFunction<Pointer<Void> Function(Pointer<Void>),
+          Pointer<Void> Function(Pointer<Void>)>('CGEventCreate');
 
   static final _CGPoint Function(Pointer<Void>) _cgEventGetLocation =
       _loadCg().lookupFunction<
@@ -160,13 +167,26 @@ class MacOSDesktopWindow
 
   @override
   Future<void> startNativeDrag() => _channel.invokeMethod<dynamic>(
-        'startNativeDrag',
-      );
+    'startNativeDrag',
+  );
+
+  /// 打开设置/聊天面板时激活窗口。
+  ///
+  /// 桌宠是 accessory（不进 Dock）应用，默认不抢焦点；窗口又是无边框的，
+  /// 不显式激活就拿不到 key window 状态，文本框打不进字。
+  @override
+  Future<void> activate() async {
+    try {
+      await _channel.invokeMethod<dynamic>('activate');
+    } catch (_) {
+      // 旧构建没有这个方法：忽略，不影响其它功能。
+    }
+  }
 
   @override
   ({double x, double y})? cursorPosition() {
     if (!Platform.isMacOS) return null;
-    final Pointer<Void> event = _cgEventCreate();
+    final Pointer<Void> event = _cgEventCreate(nullptr);
     if (event == nullptr) return null;
     try {
       final _CGPoint point = _cgEventGetLocation(event);

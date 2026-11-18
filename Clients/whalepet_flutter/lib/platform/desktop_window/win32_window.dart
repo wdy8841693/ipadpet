@@ -19,7 +19,11 @@ import 'win32_desktop_channel.dart';
 /// 本类据此刷新缓存的 DPI 比例（窗口被拖到不同缩放的显示器上时必须刷新，
 /// 否则逻辑像素 ↔ 物理像素的换算会整体偏掉）。
 class Win32DesktopWindow
-    implements DesktopWindowAdapter, DisplayChangeAware, WindowVisibilityAware {
+    implements
+        DesktopWindowAdapter,
+        DisplayChangeAware,
+        WindowVisibilityAware,
+        WindowActivator {
   Win32DesktopWindow({
     this.windowClass = 'FLUTTER_RUNNER_WIN32_WINDOW',
     this.channel,
@@ -84,6 +88,8 @@ class Win32DesktopWindow
 
   static final int Function(int, int) _showWindow = _user32.lookupFunction<
       Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow');
+  static final int Function(int) _setForegroundWindow = _user32.lookupFunction<
+      Int32 Function(IntPtr), int Function(int)>('SetForegroundWindow');
 
   // Win32 常量。
   static const int _gwlStyle = -16;
@@ -358,6 +364,15 @@ class Win32DesktopWindow
     if (_hwnd == 0) return;
     _showWindow(_hwnd, visible ? _swShowNoActivate : _swHide);
     _visible = visible;
+  }
+
+  /// 打开设置/聊天面板时把窗口置于前台：
+  /// 桌宠窗口平时不抢焦点，但面板里有输入框，必须先激活才能打字。
+  @override
+  Future<void> activate() async {
+    if (_hwnd == 0) return;
+    _showWindow(_hwnd, _swShowNoActivate);
+    _setForegroundWindow(_hwnd);
   }
 
   /// 全局光标位置（逻辑像素，屏幕坐标）。用于「透明区域自动穿透」的命中测试。

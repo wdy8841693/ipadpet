@@ -69,10 +69,12 @@ ipadpet/
 ## 架构
 
 ```
-iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──▶ 工作 DSH
-                                    ├─ ctx.speechToText   SenseVoice（本地 CPU）
-                                    ├─ 唤醒词 / VAD / 状态机
-                                    └─ ctx.sessionController → 完整 Agent 会话
+iPad App ──HTTP/WS(16kHz PCM)──▶ 旧音频通道 ─┐
+                                             ├─▶ AgentCommandService ─▶ 工作 DSH
+Flutter 三端 ─WS(/api/agent, 仅文本)─▶ 新文本通道 ┘        │
+  ├─ Android：系统识别/TTS                                  └─ 长期宠物会话、工具、任务提醒
+  ├─ Windows：SAPI 离线 KWS/听写 + 系统 TTS
+  └─ macOS：sherpa-onnx KWS + SFSpeechRecognizer 本机识别
 ```
 
 细节（协议、事件、会话轮换、安全边界）见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
@@ -84,7 +86,7 @@ iPad App ──HTTP/WS(16kHz PCM)──▶ 插件 whalepet-bridge :8787 ──�
 | 语音唤醒 | 说「**小鲸小鲸**」唤醒，宠物答一句「我在」，接着说指令；也支持一句话带命令 |
 | 设置界面 | DSH 设置 → 「鲸鱼娘」：改人设、唤醒词/应答、其它会话播报、完成播报字数，附 iPad 连接地址与令牌 |
 | 跨平台通道 | 新增 `/api/agent` 纯文本通道（protocol v2：幂等 request_id、断线补发、多客户端隔离），旧 `/api/audio` 保持不变 |
-| 跨平台客户端 | Flutter 三端共用 `lib/core/`：Android 全屏场景（系统识别/TTS）、Windows 桌宠（SAPI 离线唤醒+听写）、macOS 桌宠（文字版 + AVSpeechSynthesizer） |
+| 跨平台客户端 | Flutter 三端共用 `lib/core/`：Android 全屏场景（系统识别/TTS）、Windows 桌宠（SAPI 离线唤醒+听写）、macOS 桌宠（sherpa-onnx 本地唤醒 + 本机识别 + AVSpeechSynthesizer） |
 | 真 Agent | 宠物会话是完整的 DSH Agent：联网检索、读文件、跑命令、多步执行（默认权限 `workspace-write`） |
 | 设置页 | DSH「设置 → 鲸鱼娘」可改人设/唤醒词/播报；保存立即生效（写 `~/.dsh/whalepet/settings.json`）；页面里直接给出 iPad 连接地址与令牌 |
 | 任务提醒 | 前台时宠物用**语音播报**：宠物自己的任务（开始/授权/断线恢复/失败）**以及其它 DSH 会话的任务**（开始/完成/授权）都会报一句；断线期间完成的任务重连后补播 |
@@ -198,10 +200,11 @@ python3 tool/package_release_macos.py --no-build  # dist/whalepet-macos-<version
 - 鼠标移到透明区域自动穿透（`ignoresMouseEvents`）；
 - 交互与 Windows 完全一致：单击摸头、双击聊天、右键菜单、按住拖动。
 
-**v1 能力边界**：文字对话（`/api/agent`）+ 系统 TTS（AVSpeechSynthesizer zh-CN）已通；
-本地唤醒词与语音识别未接（设置里语音入口显示「语音关闭」），留待下一阶段。
-令牌暂存 `~/.whalepet/token.bin` 明文 0600（同机 `ipad-token` 也是 0600 明文，
-威胁模型一致），Keychain 与公证待补。出包后首次运行需「右键 → 打开」绕过 Gatekeeper。
+本地语音已接通：待机使用随包携带的 sherpa-onnx KWS 检测「小鲸小鲸」，唤醒后用
+`SFSpeechRecognizer` 的**本机识别**听指令，回答经 `AVSpeechSynthesizer` 播报。
+系统不提供本机识别时会直接禁用语音并提示，不会静默走 Apple 服务器；文本对话不受影响。
+令牌保存在 macOS Keychain（本机锁屏后不可访问），旧版明文 `~/.whalepet/token.bin`
+会在首次读取时迁移后删除。公证待补，首次运行需「右键 → 打开」绕过 Gatekeeper。
 
 细节见 [Clients/whalepet_flutter/README.md](Clients/whalepet_flutter/README.md)。
 

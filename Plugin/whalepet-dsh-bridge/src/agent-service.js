@@ -25,10 +25,9 @@ export function isSessionMissing(error) {
 
 /** 小延迟（等待用户授权时轮询用）。 */
 function delay(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    timer.unref?.()
-  })
+  // 不用 unref：这是 Agent 等待授权期间的必要步骤。unref 后测试或
+  // 嵌入式宿主的事件循环可能在 Promise resolve 前就结束，任务被取消。
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -53,6 +52,8 @@ export class AgentCommandService {
    * @param {(conversationId: string) => Promise<ConversationHandle>} deps.resolveConversation 解析会话
    * @param {number} [deps.requestTimeoutMs] 单次 wait 的超时
    * @param {number} [deps.maxWaitMs] 单轮回答最长等待
+   * @param {number} [deps.progressIntervalMs] 长任务执行中的进度播报间隔（默认 8 秒；
+   *   单次 wait 也按这个间隔切片，否则整个执行期只会阻塞在一次 wait 里）
    * @param {string} [deps.clientTimeZone]
    * @param {(request: {sessionId: string}) => string} [deps.onQuestion]
    *   需要回答时取「题目 + 选项」的口语文本；拿不到就回落到通用提示。
@@ -64,6 +65,7 @@ export class AgentCommandService {
     resolveConversation,
     requestTimeoutMs = 300000,
     maxWaitMs = 600000,
+    progressIntervalMs = 8000,
     clientTimeZone = 'Asia/Shanghai',
     onQuestion,
     logger = {},
@@ -76,6 +78,8 @@ export class AgentCommandService {
     this.resolveConversation = resolveConversation
     this.requestTimeoutMs = Math.max(1000, Number(requestTimeoutMs) || 300000)
     this.maxWaitMs = Math.max(this.requestTimeoutMs, Number(maxWaitMs) || 600000)
+    // 下限 50ms 方便测试注入短间隔；生产默认 8 秒（与旧音频通道的 thinking 心跳一致）。
+    this.progressIntervalMs = Math.max(50, Number(progressIntervalMs) || 8000)
     this.clientTimeZone = clientTimeZone
     this.onQuestion = typeof onQuestion === 'function' ? onQuestion : undefined
     this.logger = logger
@@ -105,9 +109,14 @@ export class AgentCommandService {
     const previous = this.queues.get(key) ?? Promise.resolve()
     const controller = new AbortController()
     this.controllers.add(controller)
-    const job = previous
-      .then(() => this.#runJob({ requestId: id, conversationId, text: command, notify }, controller.signal))
-      .catch(() => this.#runJob({ requestId: id, conversationId, text: command, notify }, controller.signal))
+    const run = () => this.#runJob(
+      { requestId: id, conversationId, text: command, notify },
+      controller.signal,
+    )
+    // 只把「前一条任务失败」当作本任务的执行条件。
+    // 不能写成 previous.then(run).catch(run)：那样当前任务自己失败时
+    // catch 会再跑一遍，带副作用的 Agent 命令会被执行两次。
+    const job = previous.then(run, run)
     // 队列尾巴只关心「有没有卡住」，失败不阻塞后续任务。
     this.queues.set(key, job.catch(() => {}))
     // 控制器跟随**任务**生命周期：调用方放弃等待后，任务仍在后台跑，
@@ -221,12 +230,23 @@ export class AgentCommandService {
     const startedAt = Date.now()
     let best = ''
     let confirmNotified = false
+    let lastProgressAt = startedAt
+    let progressTurn = 0
+    // 长任务执行期默认静默（只有 started / approval / finished），用户会以为
+    // 桌宠卡住了。这里在 wait 超时（任务仍在跑）时按间隔发心跳进度。
+    const progressLines = [
+      '还在处理中，稍等我一下～',
+      '任务还在跑，我已经盯着了',
+      '这边还在忙，马上就好',
+    ]
     for (;;) {
       const slice = Math.max(5000, Math.min(this.requestTimeoutMs, this.maxWaitMs - (Date.now() - startedAt)))
       const waited = await this.sessions.wait({
         sessionId,
         afterSeq,
-        timeoutMs: slice,
+        // 进度心跳要靠 wait 的超时来驱动：单次等待不能长于心跳间隔，
+        // 否则整个长任务期间只会阻塞在一次 wait 里，静默到 maxWaitMs。
+        timeoutMs: Math.min(slice, this.progressIntervalMs),
       }, signal)
       const text = lastAssistantText(waited?.output?.records)
       if (text) best = text
@@ -272,6 +292,17 @@ export class AgentCommandService {
       if (Date.now() - startedAt >= this.maxWaitMs) {
         if (best) return best
         throw new Error('DSH 响应超时')
+      }
+      // 任务仍在执行：按间隔播一条进度，避免长时间静默让用户以为卡死。
+      // 只在 wait 真的超时（waited.reason === 'timeout'）时发；input-required
+      // 与拿到文字的分支上面已经各自处理，不会重复播。
+      if (waited?.reason === 'timeout' && Date.now() - lastProgressAt >= this.progressIntervalMs) {
+        lastProgressAt = Date.now()
+        notify?.({
+          state: 'progress',
+          text: progressLines[progressTurn % progressLines.length],
+        })
+        progressTurn += 1
       }
       signal?.throwIfAborted?.()
     }

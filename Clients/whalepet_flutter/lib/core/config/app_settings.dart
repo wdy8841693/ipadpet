@@ -13,7 +13,6 @@ class AppSettings {
     this.subscriptionsAnnouncements = true,
     this.speakResponses = true,
     this.alwaysOnTop = true,
-    this.clickThroughWhereTransparent = true,
     this.windowX,
     this.windowY,
     this.chatPanelOpen = false,
@@ -39,9 +38,6 @@ class AppSettings {
 
   /// 窗口是否置顶。
   final bool alwaysOnTop;
-
-  /// 是否在「透明区域」自动鼠标穿透（鼠标离开宠物身上时不吃点击）。
-  final bool clickThroughWhereTransparent;
 
   /// 上次的窗口位置（逻辑像素）；null 表示还没手动拖过。
   final double? windowX;
@@ -93,7 +89,6 @@ class AppSettings {
     bool? subscriptionsAnnouncements,
     bool? speakResponses,
     bool? alwaysOnTop,
-    bool? clickThroughWhereTransparent,
     double? windowX,
     double? windowY,
     bool? chatPanelOpen,
@@ -110,8 +105,6 @@ class AppSettings {
           subscriptionsAnnouncements ?? this.subscriptionsAnnouncements,
       speakResponses: speakResponses ?? this.speakResponses,
       alwaysOnTop: alwaysOnTop ?? this.alwaysOnTop,
-      clickThroughWhereTransparent:
-          clickThroughWhereTransparent ?? this.clickThroughWhereTransparent,
       windowX: windowX ?? this.windowX,
       windowY: windowY ?? this.windowY,
       chatPanelOpen: chatPanelOpen ?? this.chatPanelOpen,
@@ -131,7 +124,6 @@ class AppSettings {
         'subscriptions_announcements': subscriptionsAnnouncements,
         'speak_responses': speakResponses,
         'always_on_top': alwaysOnTop,
-        'click_through_where_transparent': clickThroughWhereTransparent,
         'window_x': windowX,
         'window_y': windowY,
         'chat_panel_open': chatPanelOpen,
@@ -155,8 +147,8 @@ class AppSettings {
       subscriptionsAnnouncements: _bool(json['subscriptions_announcements'], true),
       speakResponses: _bool(json['speak_responses'], true),
       alwaysOnTop: _bool(json['always_on_top'], true),
-      clickThroughWhereTransparent:
-          _bool(json['click_through_where_transparent'], true),
+      // 旧版本配置里可能残留 click_through_where_transparent 键：
+      // 穿透现在是恒定行为，该键被忽略（fromJson 只读取上面这些已知字段）。
       windowX: _double(json['window_x']),
       windowY: _double(json['window_y']),
       chatPanelOpen: _bool(json['chat_panel_open'], false),

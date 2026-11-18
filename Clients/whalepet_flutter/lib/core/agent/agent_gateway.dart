@@ -170,6 +170,7 @@ class WebSocketAgentGateway implements AgentGateway {
     _connectInFlight = true;
     _setState(AgentConnectionState.connecting);
     final int generation = ++_generation;
+    AgentGatewayException? connectFailure;
     try {
       await _healthCheck(generation);
       final WebSocket socket = await WebSocket.connect(
@@ -207,33 +208,33 @@ class WebSocketAgentGateway implements AgentGateway {
       _attempt = 0;
       _setState(AgentConnectionState.connected);
     } on AgentGatewayException catch (error) {
+      connectFailure = error;
       _failConnection(generation, error);
-      if (error.retryable) _scheduleReconnect(generation);
     } on TimeoutException {
-      _failConnection(
-        generation,
-        AgentGatewayException('连接超时：检查地址与网络'),
-      );
-      _scheduleReconnect(generation);
+      connectFailure = AgentGatewayException('连接超时：检查地址与网络');
+      _failConnection(generation, connectFailure);
     } on SocketException catch (error) {
-      _failConnection(generation, AgentGatewayException('连接失败：${error.message}'));
-      _scheduleReconnect(generation);
+      connectFailure = AgentGatewayException('连接失败：${error.message}');
+      _failConnection(generation, connectFailure);
     } on WebSocketException catch (error) {
       final String message = error.message;
       final bool auth = message.contains('401') || message.contains('403');
-      _failConnection(
-        generation,
-        AgentGatewayException(
-          auth ? '令牌被拒绝（401/403），请检查访问令牌' : 'WebSocket 握手失败：$message',
-          retryable: !auth,
-        ),
+      connectFailure = AgentGatewayException(
+        auth ? '令牌被拒绝（401/403），请检查访问令牌' : 'WebSocket 握手失败：$message',
+        retryable: !auth,
       );
-      if (!auth) _scheduleReconnect(generation);
+      _failConnection(generation, connectFailure);
     } catch (error) {
-      _failConnection(generation, AgentGatewayException('连接异常：$error'));
-      _scheduleReconnect(generation);
+      connectFailure = AgentGatewayException('连接异常：$error');
+      _failConnection(generation, connectFailure);
     } finally {
+      // 必须先清掉 in-flight 标记再安排重试：此前在 catch 中调用
+      // _scheduleReconnect()，而它看到 _connectInFlight=true 就直接返回，
+      // 导致一次连接失败后再也不会重试。
       _connectInFlight = false;
+      if (connectFailure?.retryable == true && !_disposed) {
+        _scheduleReconnect(generation);
+      }
     }
   }
 

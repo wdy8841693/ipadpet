@@ -72,6 +72,12 @@ class CoordinatorErrorEvent extends CoordinatorEvent {
   final String message;
 }
 
+/// 一条 Agent 命令在客户端的生命周期。
+///
+/// 不能只靠 [_activeRequestId]：断线/音频中断时它会清空，而服务端任务仍在跑；
+/// cancel 后它也会清空，而迟到 response 必须被丢弃。请求账本负责区分这两种情况。
+enum _AgentRequestState { active, completed, cancelled }
+
 /// 客户端语音状态机的**唯一所有者**（§7.1）。
 ///
 /// 职责：唤醒、聆听、识别、发命令、等回答、排队播报、闭麦与恢复、取消。
@@ -150,6 +156,11 @@ class VoiceSessionCoordinator {
 
   String? _activeRequestId;
   int _activeGeneration = 0;
+
+  /// 请求账本：只接受仍为 active 的 response/error；
+  /// cancelled 的迟到结果直接丢弃，completed 防止重复播报。
+  final Map<String, _AgentRequestState> _agentRequests =
+      <String, _AgentRequestState>{};
 
   /// 本地语音自己的播报序号。唤醒应答每轮都要重新播，不能只靠 session
   /// generation 拼 id：同一轮会话里 generation 不变，队列会把它当重复项吞掉
@@ -286,6 +297,10 @@ class VoiceSessionCoordinator {
     _speakingId = null;
     final String? requestId = _activeRequestId;
     _activeRequestId = null;
+    // 标记取消后，服务端即使还在后台执行并在稍后返回 response，也不能上屏或播报。
+    if (requestId != null) {
+      _agentRequests[requestId] = _AgentRequestState.cancelled;
+    }
     await speech.stop();
     await engine.stopListening();
     if (requestId != null) {
@@ -366,6 +381,7 @@ class VoiceSessionCoordinator {
     _generation++;
     _listenTimer?.cancel();
     queue.clear();
+    _agentRequests.clear();
     await _engineSubscription?.cancel();
     await _speechSubscription?.cancel();
     await speech.stop();
@@ -469,7 +485,9 @@ class VoiceSessionCoordinator {
           seconds: 4,
           generation: gen,
         ));
-        _setState(VoiceSessionState.listening);
+        // 只把状态改成 listening 不够：真实引擎的这一轮已经结束，
+        // VoiceEventRouter 也可能关闭了本轮，必须真正重启采集/识别。
+        unawaited(_beginListening(gen));
         return;
       }
       unawaited(_resumeWake(gen));
@@ -557,11 +575,13 @@ class VoiceSessionCoordinator {
     final String requestId = newRequestId();
     _activeRequestId = requestId;
     _activeGeneration = gen;
+    _agentRequests[requestId] = _AgentRequestState.active;
     try {
       await _sendCommand(requestId: requestId, text: text, source: source);
     } catch (error) {
       if (gen != _generation) return;
       _activeRequestId = null;
+      _agentRequests[requestId] = _AgentRequestState.completed;
       _emit(CoordinatorErrorEvent(message: '发送失败：$error', generation: gen));
       _settle(gen);
     }
@@ -598,8 +618,12 @@ class VoiceSessionCoordinator {
   }
 
   void _onTask(AgentTaskEvent event) {
-    if (event.requestId != _activeRequestId) return;
-    final int gen = _activeGeneration;
+    // 断线/音频中断会清空 _activeRequestId，但请求账本仍是 active；
+    // cancel/completed 的请求则不能继续改变 UI 或播报状态。
+    if (_agentRequests[event.requestId] != _AgentRequestState.active) return;
+    final int gen = event.requestId == _activeRequestId
+        ? _activeGeneration
+        : _generation;
     switch (event.state) {
       case 'queued':
         _emit(CoordinatorBubbleEvent(
@@ -609,6 +633,14 @@ class VoiceSessionCoordinator {
         ));
       case 'started':
         _setState(VoiceSessionState.thinking);
+      case 'progress':
+        // 长任务心跳：只刷新气泡告诉用户"还在跑"，不进播报队列——
+        // 否则每隔几十秒就打断一次 TTS，反而吵。
+        _emit(CoordinatorBubbleEvent(
+          text: event.text ?? '还在处理中…',
+          seconds: 5,
+          generation: gen,
+        ));
       case 'approval':
         queue.enqueue(SpeechItem(
           id: event.eventId ?? 'approval-${event.requestId}',
@@ -628,7 +660,16 @@ class VoiceSessionCoordinator {
         ));
         _pumpSpeech(gen, resume: VoiceSessionState.waitingWake);
       case 'failed':
+        _activeRequestId = null;
+        _agentRequests[event.requestId] = _AgentRequestState.completed;
+        _emit(CoordinatorBubbleEvent(
+          text: event.text ?? '出错了',
+          seconds: 6,
+          generation: gen,
+        ));
+        if (!_speaking) _settle(gen);
       case 'interrupted':
+        // 服务端任务仍在后台继续：保留账本 active，稍后的 response 必须能上屏。
         _activeRequestId = null;
         _emit(CoordinatorBubbleEvent(
           text: event.text ?? '任务中断了',
@@ -642,6 +683,9 @@ class VoiceSessionCoordinator {
   }
 
   void _onResponse(AgentResponseEvent event) {
+    // 取消、失败或已经播过的请求不再接受迟到结果。
+    if (_agentRequests[event.requestId] != _AgentRequestState.active) return;
+    _agentRequests[event.requestId] = _AgentRequestState.completed;
     final int gen = _activeRequestId == event.requestId
         ? _activeGeneration
         : _generation;
@@ -686,10 +730,17 @@ class VoiceSessionCoordinator {
   }
 
   void _onAgentError(AgentErrorEvent event) {
-    final int gen = event.requestId == _activeRequestId
+    final String? requestId = event.requestId;
+    if (requestId != null) {
+      if (_agentRequests[requestId] != _AgentRequestState.active) return;
+      _agentRequests[requestId] = _AgentRequestState.completed;
+    }
+    final int gen = requestId == _activeRequestId
         ? _activeGeneration
         : _generation;
-    if (event.requestId == _activeRequestId) _activeRequestId = null;
+    if (requestId != null && requestId == _activeRequestId) {
+      _activeRequestId = null;
+    }
     _emit(CoordinatorBubbleEvent(
       text: event.message.isEmpty ? '出错了' : event.message,
       seconds: 8,

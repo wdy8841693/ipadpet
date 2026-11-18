@@ -222,7 +222,7 @@ python tool/fetch_sherpa_onnx_windows.py --with-kws # 额外拉 KWS 模型（Git
 | 显示器变化 | 启动时约束一次 | `NSApplication.didChangeScreenParameters` → 原生回调 `screensChanged` → Dart 重读工作区并把窗口夹回可见范围（§10.2） |
 | 全局光标 | `GetCursorPos` | CoreGraphics `CGEventCreate` + `CGEventGetLocation`（FFI，同步） |
 | 系统 TTS | SAPI5（`System.Speech`） | `AVSpeechSynthesizer`（zh-CN） |
-| 令牌存储 | DPAPI 密文 | `~/.whalepet/token.bin` 明文 + 0600（待换 Keychain） |
+| 令牌存储 | DPAPI 密文 | macOS Keychain（旧明文 `token.bin` 首次读取后迁移并删除） |
 | 本地唤醒/识别 | SAPI5 离线识别器（唤醒词小语法 + 听写语法） | **唤醒**：sherpa-onnx 本地 KWS（离线模型）<br>**识别**：系统 `SFSpeechRecognizer` 本机识别（on-device） |
 
 **macOS 本地语音（阶段 D 文字版 → 阶段 E 语音版 → 真 KWS）**
@@ -247,7 +247,7 @@ macOS 端现在也有完整的「唤醒 → 识别 → 文本 → DSH → 播报
 |---|---|
 | 唤醒（真 KWS） | 常驻子进程 `tool/whalepet_kws.cpp`（sherpa-onnx，中文拼音建模）；采集与重采样在 `macos/Runner/VoiceEngine.swift`，PCM 不进 Dart（§7.4） |
 | 唤醒词表 | 模型只认拼音 token，映射表在 `macos/Runner/WhalePetWakeKeywords.swift`；表里没有的词自动退回文本匹配 |
-| 识别 | 指令识别用系统 `SFSpeechRecognizer`；`supportsOnDeviceRecognition` 为真时强制 `requiresOnDeviceRecognition = true`，为假时仍可用，但会在引擎信息里标明「可能走 Apple 服务器」 |
+| 识别 | 指令识别用系统 `SFSpeechRecognizer`；必须支持 `requiresOnDeviceRecognition` 才允许启用语音。系统不提供本机识别时直接禁用并提示，不会静默把音频送到 Apple 服务器 |
 | 载荷 | 运行时动态库 + KWS 模型约 40MB，**不入库**；`tool/fetch_sherpa_onnx.sh` 拉取，Xcode「Copy KWS Payload」阶段拷进 App 包 `Resources/kws/`，出包时随包内置（离线可用） |
 | 降级 | 没有载荷 / 唤醒词不在拼音表 / 子进程起不来 → 自动退回「系统识别 + 唤醒词文本匹配」，功能不丢，只是待机期更费电 |
 | 触发阈值 | 默认 0.08（按 TTS 合成音频标定的初值），真机复验时按实际误触发率再调 |
@@ -264,8 +264,9 @@ tool/fetch_sherpa_onnx.sh
 WHALEPET_VOICE_DEBUG=1 ./build/macos/Build/Products/Release/whalepet_flutter.app/Contents/MacOS/whalepet_flutter
 ```
 
-**为什么令牌先明文**：同机 `~/.dsh/whalepet/ipad-token` 本来就是 0600 明文，威胁模型一致；
-后续换 Keychain（`SecItemAdd`）后再打开 App Sandbox。
+**令牌存储**：通过 `whalepet/secure` MethodChannel 写入 Keychain
+（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`）。旧版 `~/.whalepet/token.bin`
+只在首次读取时用于迁移，成功后立即删除；写令牌失败时保留旧文件，避免用户被锁在外面。
 
 **一个 macOS 独有的坑**：`FlutterAppDelegate` 的 `applicationDidFinishLaunching`
 只在协议里声明，Swift 重写**不会**挂到 `applicationDidFinishLaunching:` 这个 ObjC 入口上

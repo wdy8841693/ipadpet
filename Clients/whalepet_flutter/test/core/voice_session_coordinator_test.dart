@@ -291,6 +291,36 @@ void main() {
       await rig.dispose();
     });
 
+    test('空识别后真正重启聆听，重说的指令能发出去', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.enable();
+      await rig.coordinator.manualListen();
+      expect(
+        rig.engine.log.where((String e) => e == 'listen').length,
+        1,
+      );
+
+      rig.engine.emit(const VoiceFinalTranscriptEvent(
+        text: '嗯',
+        confidence: 0.9,
+      ));
+      await rig.pump();
+      expect(
+        rig.engine.log.where((String e) => e == 'listen').length,
+        2,
+        reason: '提示重说后必须重新调用引擎，不能只改 Dart 状态',
+      );
+
+      rig.engine.emit(const VoiceFinalTranscriptEvent(
+        text: '查天气',
+        confidence: 0.9,
+      ));
+      await rig.pump();
+      expect(rig.sent, hasLength(1));
+      expect(rig.sent.single['text'], '查天气');
+      await rig.dispose();
+    });
+
     test('引擎侧编号与会话 generation 不同也要照常派发命令（回归）', () async {
       // 真实引擎里 generation 是「第几条控制命令」：唤醒=1、闭麦=2、聆听=3，
       // 而协调器的会话 generation 一次 enable 只 +1。两者一旦被拿来互相比较，
@@ -347,6 +377,55 @@ void main() {
       await rig.pump();
       await rig.coordinator.cancel();
       expect(rig.cancelled, hasLength(1));
+      await rig.dispose();
+    });
+
+    test('取消后迟到的 response 不上屏也不播报', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.submitText('跑个长任务');
+      final String requestId = rig.sent.single['request_id']!;
+      await rig.coordinator.cancel();
+
+      rig.coordinator.onAgentEvent(responseFor(requestId));
+      await rig.pump();
+
+      expect(rig.chatLines.where((ChatLike l) => !l.fromUser), isEmpty);
+      expect(rig.speech.spoken, isEmpty);
+      await rig.dispose();
+    });
+
+    test('任务 interrupted 后仍能接收后台完成的 response', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.submitText('后台跑一会儿');
+      final String requestId = rig.sent.single['request_id']!;
+
+      rig.coordinator.onAgentEvent(taskFor(requestId, 'interrupted'));
+      rig.coordinator.onAgentEvent(responseFor(requestId));
+      await rig.pump();
+
+      expect(rig.chatLines.where((ChatLike l) => !l.fromUser), hasLength(1));
+      expect(rig.speech.spoken, contains('结果是晴天'));
+      await rig.dispose();
+    });
+
+    test('任务 progress 心跳只刷新气泡，不进播报队列打断 TTS', () async {
+      final Rig rig = Rig();
+      await rig.coordinator.submitText('整理一堆资料');
+      final String requestId = rig.sent.single['request_id']!;
+
+      rig.coordinator.onAgentEvent(taskFor(requestId, 'started'));
+      rig.coordinator.onAgentEvent(
+          taskFor(requestId, 'progress', text: '还在处理中，稍等我一下～'));
+      await rig.pump();
+
+      expect(rig.bubbles, contains('还在处理中，稍等我一下～'));
+      expect(rig.speech.spoken, isEmpty,
+          reason: '进度心跳不该被 TTS 念出来，否则长任务每隔几十秒打断一次');
+
+      // 后续正式回答仍能正常播报。
+      rig.coordinator.onAgentEvent(responseFor(requestId));
+      await rig.pump();
+      expect(rig.speech.spoken, contains('结果是晴天'));
       await rig.dispose();
     });
 

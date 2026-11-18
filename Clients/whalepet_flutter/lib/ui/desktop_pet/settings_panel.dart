@@ -38,7 +38,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
   late bool _announcements;
   late bool _speak;
   late bool _alwaysOnTop;
-  late bool _clickThrough;
   late bool _autostart;
   late bool _oneShotCommand;
   bool _saving = false;
@@ -57,7 +56,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _announcements = settings.subscriptionsAnnouncements;
     _speak = settings.speakResponses;
     _alwaysOnTop = settings.alwaysOnTop;
-    _clickThrough = settings.clickThroughWhereTransparent;
     _autostart = settings.autostartEnabled;
     _oneShotCommand = settings.oneShotCommandEnabled;
   }
@@ -82,7 +80,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
       subscriptionsAnnouncements: _announcements,
       speakResponses: _speak,
       alwaysOnTop: _alwaysOnTop,
-      clickThroughWhereTransparent: _clickThrough,
       voiceWakeEnabled: _voiceWake,
       wakePhrase: _wakePhraseController.text.trim().isEmpty
           ? '小鲸小鲸'
@@ -201,12 +198,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       value: _alwaysOnTop,
                       onChanged: (bool value) =>
                           setState(() => _alwaysOnTop = value),
-                    ),
-                    _SwitchRow(
-                      label: '透明区域自动穿透',
-                      value: _clickThrough,
-                      onChanged: (bool value) =>
-                          setState(() => _clickThrough = value),
                     ),
                     if (runtime.autostartSupported)
                       _SwitchRow(

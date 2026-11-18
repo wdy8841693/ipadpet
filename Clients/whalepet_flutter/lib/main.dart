@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core/config/app_paths.dart';
+import 'core/config/token_store.dart';
 import 'core/platform/autostart.dart';
 import 'core/platform/desktop_tray.dart';
 import 'core/platform/desktop_window.dart';
@@ -16,6 +17,7 @@ import 'platform/desktop_window/macos_window.dart';
 import 'platform/desktop_window/win32_desktop_channel.dart';
 import 'platform/desktop_window/win32_window.dart';
 import 'platform/secure_storage/keystore_token_store.dart';
+import 'platform/secure_storage/macos_keychain_token_store.dart';
 import 'platform/speech_output/android_system_tts.dart';
 import 'platform/speech_output/macos_speech.dart';
 import 'platform/speech_output/powershell_speech.dart';
@@ -34,7 +36,7 @@ import 'ui/mobile_scene/mobile_pet_runtime.dart';
 /// |---|---|---|---|---|
 /// | Android | `ui/mobile_scene`（全屏场景） | 系统 SpeechRecognizer | 系统 TTS | Keystore |
 /// | Windows | `ui/desktop_pet`（透明窗口） | SAPI 语法 + 离线听写 | SAPI | DPAPI |
-/// | macOS | `ui/desktop_pet`（透明窗口，阶段 D 文字版） | 空实现（暂无本地唤醒/识别） | AVSpeechSynthesizer | DPAPI |
+/// | macOS | `ui/desktop_pet`（透明窗口） | sherpa-onnx KWS + SFSpeechRecognizer 本机识别 | AVSpeechSynthesizer | Keychain |
 /// | 其它 | 桌面壳 + 空实现（仅开发/测试） | — | — | 明文 |
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -96,6 +98,13 @@ Future<void> _runDesktop() async {
   final AutostartController? autostart =
       Platform.isWindows ? Win32Autostart() : null;
 
+  // macOS 使用 Keychain；旧明文 token.bin 只在首次读取时迁移后删除。
+  final TokenStorage tokenStorage = Platform.isMacOS
+      ? MacOSKeychainTokenStore(
+          plaintextFallback: TokenStore(file: paths.tokenFile),
+        )
+      : TokenStore(file: paths.tokenFile);
+
   // 开发验证钩子：设置环境变量 WHALEPET_VOICE_WAV 指向一段 WAV，
   // 引擎就用 SetInputToWaveFile 代替麦克风，可在无麦克风的机器上跑通全链路。
   final String? voiceWav = Platform.environment['WHALEPET_VOICE_WAV'];
@@ -110,6 +119,7 @@ Future<void> _runDesktop() async {
     window: window,
     speech: speech,
     voiceEngine: voiceEngine,
+    tokenStorage: tokenStorage,
     tray: tray,
     autostart: autostart,
   );
