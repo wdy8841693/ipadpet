@@ -6,7 +6,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createBridgeServer, normalizeBridgeConfig, tokenEquals } from '../src/server.js'
+import { createBridgeServer, normalizeBridgeConfig, tokenEquals, PLUGIN_VERSION } from '../src/server.js'
 import { TestWebSocketClient } from './ws-client.js'
 import { utterance, silenceFrames } from './audio-fixture.js'
 
@@ -82,7 +82,7 @@ test('HTTP: health 需要鉴权，鉴权后返回 asr 状态', async () => {
     assert.equal(body.ok, true)
     assert.equal(body.asr, true)
     assert.equal(body.model, 'mock-sensevoice')
-    assert.equal(body.version, '0.4.1')
+    assert.equal(body.version, PLUGIN_VERSION)
     assert.deepEqual(body.agent, { ready: true })
     assert.deepEqual(body.protocols, ['audio-v1', 'agent-v2'])
   } finally {

@@ -13,7 +13,7 @@
 | iPad App（`WhalePet/`） | **v1.2.6** | SpriteKit 宠物 + 语音采集/TTS + 网关客户端 |
 | Flutter 客户端（`Clients/whalepet_flutter/`） | **v0.3.2** | Android 全屏 + Windows / macOS 桌宠，共用 `lib/core/`，走 `/api/agent` 文本协议 |
 | 原生 Java 原型（`Android/`） | v1.3.0-android.1 | 用 SurfaceView + Canvas 手写的第一版 Android App，保留作参考/对比 |
-| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.4.1** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务 |
+| DSH 插件（`Plugin/whalepet-dsh-bridge/`） | **0.5.0** | 局域网网关：旧音频通道 + 新 `/api/agent` 文本通道，共用一个 Agent 服务；长任务进度心跳、跨重连取消 |
 
 ![预览](docs/preview.png)
 
@@ -228,7 +228,7 @@ python3 tool/package_release_macos.py --no-build  # dist/whalepet-macos-<version
 # Linux 侧全量静态自检（Swift 括号、工程配置、纹理引用、显存预算、权限声明、插件测试）
 python3 Tools/scripts/check.py
 
-# 插件单元/集成测试（89 个）
+# 插件单元/集成测试（94 个）
 cd Plugin/whalepet-dsh-bridge && node --test test/*.test.js
 ```
 
